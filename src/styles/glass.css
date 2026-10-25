@@ -1,0 +1,42 @@
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --blur: 16px;
+  --text: #f1f3f8;
+  --muted: #b4b9c8;
+  --primary-bg: rgba(255, 255, 255, 0.9);
+  --primary-fg: #1a1c24;
+  --tag-mp3: #5be39a;
+  --tag-mp4: #6aa8ff;
+  --tag-img: #ffb35c;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+/* Without Mica/Acrylic the window has no backdrop, so paint our own. */
+html.fx-none body {
+  background:
+    radial-gradient(circle at 15% 10%, #3b5bdb55, transparent 55%),
+    radial-gradient(circle at 90% 90%, #e6497955, transparent 50%),
+    #1a1c24;
+}
+
+html.fx-mica body,
+html.fx-acrylic body {
+  background: transparent;
+}
+
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--blur));
+  border-radius: 12px;
+}
