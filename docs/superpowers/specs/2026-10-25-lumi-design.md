@@ -1,6 +1,6 @@
 # Lumi — Thiết kế bản đầu (kiểu A: dán link)
 
-Ngày: 2026-10-25 · Trạng thái: chờ duyệt
+Ngày: 2026-10-25 · Trạng thái: **đã duyệt** (người dùng duyệt 2026-10-25)
 
 Ký hiệu: **[Người dùng]** = người dùng đã quyết. **[Claude]** = quyết định của người viết tài liệu, người dùng chưa xác nhận, người làm có thể đổi nếu có lý do. Không đánh dấu = mô tả chung.
 
@@ -46,7 +46,7 @@ Thành công nghĩa là: copy link → dán vào Lumi → vài giây sau thấy 
 | Đổi sang MP3, ghép video+audio | **ffmpeg** | [Claude] |
 | Ảnh (bài ảnh Instagram, slideshow ảnh TikTok, ảnh Facebook) | **gallery-dl** (bản `.exe` độc lập) | [Claude]. Lý do: yt-dlp chỉ làm video, bài chỉ có ảnh trên Instagram thường không đọc được. Người dùng chưa được hỏi về điểm này. |
 | Frontend | Svelte 5 + TypeScript + Vite | [Claude]. Bundle nhỏ. Người làm có thể đổi sang framework khác nếu bundle vẫn nhỏ. |
-| Ngôn ngữ giao diện | Tiếng Việt | [Claude] |
+| Ngôn ngữ giao diện | **Tiếng Việt + tiếng Anh** | [Người dùng]. *[Claude]* Mặc định theo ngôn ngữ của Windows (máy tiếng Việt thì dùng tiếng Việt, còn lại dùng tiếng Anh). Đổi được trong Cài đặt. Mọi chuỗi giao diện và câu báo lỗi (§6) đều có đủ hai thứ tiếng. |
 
 Python, Go và Rust thuần đã được cân nhắc. Chọn Tauri vì yt-dlp không có bản thay thế tương đương trên Go/Rust, nên đằng nào bên trong cũng phải chạy yt-dlp. Khi đó vỏ Tauri là cách nhẹ nhất để có giao diện đẹp.
 
@@ -89,6 +89,7 @@ Người dùng đã chọn qua mockup: **bố cục A, một màn hình gọn** 
 ### 4.5 Cài đặt (sau nút bánh răng)
 - **Tài khoản:** hai dòng "Instagram" và "Facebook". Mỗi dòng có trạng thái (đã kết nối / chưa), nút **Kết nối** và nút **Đăng xuất** **[Người dùng]** chọn đăng nhập trong app.
 - **Công cụ:** phiên bản yt-dlp, gallery-dl, ffmpeg, kèm nút **Cập nhật**.
+- **Ngôn ngữ:** Tiếng Việt / English **[Người dùng]**.
 - *[Claude]* Không có cài đặt chất lượng mặc định ở bản đầu.
 
 ### 4.6 Phong cách hình ảnh **[Người dùng]** chọn "kính mờ"
