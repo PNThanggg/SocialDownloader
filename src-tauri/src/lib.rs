@@ -1,7 +1,9 @@
+mod accounts;
 mod errors;
 mod model;
 mod resolve;
 mod site;
+mod thumb;
 mod tools;
 mod window_fx;
 
@@ -16,12 +18,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(window_fx::WindowEffect::default())
         .manage(tools::ToolsState::default())
+        .manage(resolve::ResolveCache::default())
         .invoke_handler(tauri::generate_handler![
             window_fx::window_effect,
             tools::tools_status,
             tools::tool_download_size,
             tools::install_tool,
-            tools::update_tools
+            tools::update_tools,
+            resolve::resolve,
+            thumb::fetch_thumbnail
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

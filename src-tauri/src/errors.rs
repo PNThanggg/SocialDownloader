@@ -44,7 +44,7 @@ fn re(pattern: &str) -> Regex {
 
 static BOT_CHECK: Lazy<Regex> = Lazy::new(|| re(r"sign in to confirm you(?:’|')re not a bot"));
 static LOGIN: Lazy<Regex> = Lazy::new(|| {
-    re(r"login required|log in|only available for registered users|AuthorizationError|cookies? .*required")
+    re(r"login required|login page|log in|only available for registered users|AuthorizationError|cookies? .*required")
 });
 static PRIVATE: Lazy<Regex> = Lazy::new(|| {
     re(r"private video|video unavailable|NotFoundError|has been removed|(?:video|content) (?:is )?(?:not|no longer) available")
@@ -89,6 +89,7 @@ mod tests {
             (Site::Other, "ERROR: Unsupported URL: https://x", UnsupportedUrl),
             (Site::Instagram, "[Instagram] C8x: Requested content is not available, rate-limit reached or login required", LoginRequired { site: Site::Instagram }),
             (Site::Instagram, "[instagram][error] AuthorizationError: Login required", LoginRequired { site: Site::Instagram }),
+            (Site::Instagram, "AbortExtraction: HTTP redirect to login page (https://www.instagram.com/accounts/login/)", LoginRequired { site: Site::Instagram }),
             (Site::Facebook, "ERROR: [facebook] 1: This video is only available for registered users", LoginRequired { site: Site::Facebook }),
             (Site::Youtube, "ERROR: [youtube] x: Private video", PrivateOrRemoved),
             (Site::Youtube, "ERROR: [youtube] x: Video unavailable", PrivateOrRemoved),
