@@ -18,7 +18,8 @@ Built with Tauri 2 (Rust) and Svelte 5.
   signs in through its own in-app window, and its cookies are DPAPI-encrypted at rest.
 - **Plain-language errors** with a way forward (connect, update the tools, retry), in Vietnamese and
   English.
-- **Small installer** (about 2.5 MB): the download tools are fetched on first launch, not bundled.
+- **Small installer** (about 2.5 MB) or a **portable** exe: the download tools are fetched on first
+  launch, not bundled.
 
 ## How it works
 
@@ -78,6 +79,10 @@ npm run tauri build
 
 The installer is written to `src-tauri/target/release/bundle/nsis/Lumi_<version>_x64-setup.exe`.
 It is not code-signed, so Windows SmartScreen warns on first install.
+
+`src-tauri/target/release/Lumi.exe` is also the **portable** build: it runs without installing
+(published as `Lumi_<version>_x64-portable.exe`). It still keeps its data in `%LOCALAPPDATA%\Lumi`, and it
+needs the WebView2 runtime, which Windows 11 has and the installer fetches when missing.
 
 ## Note
 
