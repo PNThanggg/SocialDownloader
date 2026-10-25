@@ -1,16 +1,67 @@
 // Dev-only fixtures for looking at the UI without network. Imported only under
 // `import.meta.env.DEV` in App.svelte, so production builds drop this file.
+import { emit } from '@tauri-apps/api/event'
+import type { DemoBackend } from '../api'
 import { language } from '../i18n'
-import type { LumiError, MediaInfo } from '../types'
+import { askForTool } from '../tools'
+import type { AccountStatus, LumiError, MediaInfo, Tool, ToolStatus } from '../types'
 
 export interface Demo {
   url: string
   info?: MediaInfo
   error?: LumiError
   busy?: boolean
+  /** Open the settings sheet. */
+  settings?: boolean
+  /** Run the real resolve flow on `url` once the app is ready. */
+  resolve?: boolean
+  /** Runs shortly after the screen is up (e.g. to raise a tool prompt). */
+  after?: () => void
 }
 
 const MB = 1024 * 1024
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const tool = (t: Tool, version: string | null): ToolStatus => ({ tool: t, installed: version !== null, version })
+const VERSIONS: Record<Tool, string> = {
+  yt_dlp: '2025.10.22',
+  gallery_dl: '1.30.10',
+  ffmpeg: 'N-121583-g4348bde2d2-20251024',
+  deno: 'deno 2.5.4 (stable, release, x86_64-pc-windows-msvc)',
+}
+/** Every tool installed except `missing`. */
+const tools = (...missing: Tool[]) =>
+  (Object.keys(VERSIONS) as Tool[]).map((t) => tool(t, missing.includes(t) ? null : VERSIONS[t]))
+
+const network: LumiError = { error: { code: 'network' }, detail: 'error sending request: dns error' }
+
+/** A fake install that reports progress through the real event bus for `secs`, or fails partway. */
+function install(plan: Partial<Record<Tool, { size: number | null; secs: number; fail?: LumiError }>>) {
+  return async (args?: Record<string, unknown>) => {
+    const t = args?.tool as Tool
+    const { size, secs, fail } = plan[t] ?? { size: 20 * MB, secs: 3 }
+    const steps = Math.max(1, Math.round(secs * 5))
+    for (let i = 1; i <= steps; i++) {
+      await sleep(200)
+      if (fail && i >= steps / 3) throw fail
+      const downloaded = Math.round((size ?? 24 * MB) * (i / steps))
+      await emit('lumi://tool-progress', { tool: t, downloaded, total: size })
+    }
+    return tool(t, VERSIONS[t])
+  }
+}
+
+/** Answers these commands in place of the backend; everything else still reaches Rust. */
+function backend(handlers: Record<string, (args?: Record<string, unknown>) => unknown>) {
+  const fake: DemoBackend = (cmd, args) =>
+    cmd in handlers ? Promise.resolve().then(() => handlers[cmd](args)) : undefined
+  ;(globalThis as { __lumiDemoBackend?: DemoBackend }).__lumiDemoBackend = fake
+}
+
+const accounts = (instagram: boolean, facebook: boolean): AccountStatus[] => [
+  { site: 'instagram', connected: instagram },
+  { site: 'facebook', connected: facebook },
+]
 
 const tiktok: MediaInfo = {
   sourceUrl: 'https://www.tiktok.com/@lumi.music/video/7381234567890123456',
@@ -101,6 +152,63 @@ export function demo(spec: string): Demo {
   const [name, lang] = spec.split(':')
   if (lang === 'vi' || lang === 'en') language.set(lang)
   switch (name) {
+    case 'setup':
+      // yt-dlp finishes quickly, gallery-dl stays in progress long enough to look at.
+      backend({
+        tools_status: () => tools('yt_dlp', 'gallery_dl'),
+        install_tool: install({ yt_dlp: { size: 18.4 * MB, secs: 2 }, gallery_dl: { size: 13.1 * MB, secs: 90 } }),
+      })
+      return { url: '' }
+    case 'setup-error':
+      backend({
+        tools_status: () => tools('yt_dlp', 'gallery_dl'),
+        install_tool: install({ yt_dlp: { size: 18.4 * MB, secs: 1 }, gallery_dl: { size: 13.1 * MB, secs: 3, fail: network } }),
+      })
+      return { url: '' }
+    case 'settings':
+    case 'settings-busy':
+      backend({
+        tools_status: () => tools('ffmpeg'),
+        accounts_status: () => accounts(true, false),
+        connect_account: () => new Promise(() => {}),
+        update_tools: async () => (await sleep(4000), tools('ffmpeg')),
+      })
+      return {
+        url: tiktok.sourceUrl,
+        info: tiktok,
+        settings: true,
+        after:
+          name === 'settings-busy'
+            ? () => document.querySelector<HTMLButtonElement>('[data-site="facebook"] .btn-primary')?.click()
+            : undefined,
+      }
+    case 'prompt':
+      // The real flow: a YouTube link while deno is missing asks first.
+      backend({
+        tools_status: () => tools('deno'),
+        tool_download_size: () => 41.7 * MB,
+        install_tool: install({ deno: { size: 41.7 * MB, secs: 60 } }),
+        resolve: async () => (await sleep(600), youtube),
+      })
+      return { url: youtube.sourceUrl, resolve: true }
+    case 'limited':
+      // A YouTube result read without deno ("Later"): the chip offers to install it.
+      backend({ tools_status: () => tools('deno') })
+      return { url: youtube.sourceUrl, info: youtube }
+    case 'prompt-ffmpeg':
+    case 'prompt-nosize':
+    case 'prompt-install':
+    case 'prompt-error':
+      backend({
+        tools_status: () => tools('ffmpeg'),
+        tool_download_size: () => (name === 'prompt-nosize' ? null : 86.4 * MB),
+        install_tool: install({ ffmpeg: { size: 86.4 * MB, secs: name === 'prompt-error' ? 1 : 90, fail: name === 'prompt-error' ? network : undefined } }),
+      })
+      return {
+        url: tiktok.sourceUrl,
+        info: tiktok,
+        after: () => void askForTool('ffmpeg', name === 'prompt-install' || name === 'prompt-error'),
+      }
     case 'instagram':
       return { url: instagram.sourceUrl, info: instagram }
     case 'youtube':

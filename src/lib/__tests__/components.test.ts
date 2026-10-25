@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
+import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { JobEvent, LumiError, MediaInfo, MediaOption } from '../types'
 
@@ -27,6 +28,9 @@ vi.mock('../api', async (importOriginal) => {
     fetchThumbnail: vi.fn(async () => {
       throw { error: { code: 'network' }, detail: 'offline' }
     }),
+    toolDownloadSize: vi.fn(async () => 80 * 1024 * 1024),
+    installTool: vi.fn(async (tool: string) => ({ tool, installed: true, version: '7.1' })),
+    onToolProgress: vi.fn(async () => () => {}),
     onJob: vi.fn(async (cb: (e: JobEvent) => void) => {
       h.jobListeners.push(cb)
       return () => {
@@ -47,14 +51,17 @@ vi.mock('@tauri-apps/plugin-store', () => ({
   })),
 }))
 
-import { readText } from '@tauri-apps/plugin-clipboard-manager'
+import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { save } from '@tauri-apps/plugin-dialog'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import * as api from '../api'
 import ErrorBanner from '../components/ErrorBanner.svelte'
 import LinkInput from '../components/LinkInput.svelte'
 import OptionRow from '../components/OptionRow.svelte'
 import ResultCard from '../components/ResultCard.svelte'
+import ToolPrompt from '../components/ToolPrompt.svelte'
 import { language } from '../i18n'
+import { toolRequests } from '../tools'
 
 const opt = (o: Partial<MediaOption> & Pick<MediaOption, 'id' | 'kind' | 'label'>): MediaOption => ({
   ext: o.kind === 'video' ? 'mp4' : o.kind === 'image' ? 'jpg' : 'mp3',
@@ -102,6 +109,8 @@ const multi: MediaInfo = {
   })),
 }
 
+const getRequests = () => get(toolRequests)
+
 function emit(e: Partial<JobEvent> & Pick<JobEvent, 'state'>) {
   const ev = { jobId: 'job-1', url: single.sourceUrl, optionId: '0/audio', ...e } as JobEvent
   h.jobListeners.forEach((l) => l(ev))
@@ -110,6 +119,7 @@ function emit(e: Partial<JobEvent> & Pick<JobEvent, 'state'>) {
 beforeEach(() => {
   language.set('en')
   h.kv.clear()
+  toolRequests.set([])
   vi.clearAllMocks()
 })
 
@@ -137,6 +147,31 @@ describe('ResultCard', () => {
     expect(visible()).toEqual(['0/image'])
     await fireEvent.click(container.querySelectorAll('.grid [role="option"]')[1])
     expect(visible()).toEqual(['1/image'])
+  })
+
+  it('Download all Cancel is disabled while cancelling and surfaces a failure', async () => {
+    let fail!: (e: unknown) => void
+    vi.mocked(api.cancelJob).mockReturnValueOnce(new Promise((_, rej) => (fail = rej)))
+    render(ResultCard, { info: multi })
+    await fireEvent.click(screen.getByRole('button', { name: 'Download all' }))
+    await waitFor(() => expect(api.downloadAll).toHaveBeenCalledWith(multi.sourceUrl, 'D:\\x'))
+    const cancel = (await screen.findByRole('button', { name: 'Cancel' })) as HTMLButtonElement
+    await fireEvent.click(cancel)
+    expect(api.cancelJob).toHaveBeenCalledWith('job-all')
+    expect(cancel.disabled).toBe(true)
+    fail(new Error('nope'))
+    await screen.findByText("Couldn't cancel the download.")
+    expect(cancel.disabled).toBe(false)
+  })
+
+  it('Download all offers ffmpeg and reuses the chosen folder', async () => {
+    vi.mocked(api.downloadAll).mockRejectedValueOnce({ error: { code: 'tool_missing', tool: 'ffmpeg' }, detail: '' })
+    render(ResultCard, { info: multi })
+    await fireEvent.click(screen.getByRole('button', { name: 'Download all' }))
+    await waitFor(() => expect(getRequests().map((r) => r.tool)).toEqual(['ffmpeg']))
+    getRequests()[0].settle({ tool: 'ffmpeg', installed: true, version: '7.1' })
+    await waitFor(() => expect(api.downloadAll).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.downloadAll).mock.calls[1]).toEqual([multi.sourceUrl, 'D:\\x'])
   })
 })
 
@@ -187,6 +222,71 @@ describe('OptionRow', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(api.download).toHaveBeenCalledTimes(2))
     expect(vi.mocked(api.download).mock.calls[1]).toEqual([single.sourceUrl, '0/audio', 'D:\\x\\a.mp3'])
+  })
+
+  it('offers ffmpeg when it is missing, then downloads to the kept dest without a second Save as', async () => {
+    const ffmpegMissing: LumiError = { error: { code: 'tool_missing', tool: 'ffmpeg' }, detail: 'ffmpeg is not installed' }
+    vi.mocked(api.download).mockRejectedValueOnce(ffmpegMissing)
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(getRequests().map((r) => r.tool)).toEqual(['ffmpeg']))
+    expect(screen.queryByText('The ffmpeg tool is missing.')).toBeNull()
+
+    const req = getRequests()[0]
+    render(ToolPrompt, { tool: req.tool, oninstalled: req.settle, onlater: () => req.settle(null) })
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('Lumi needs to download ffmpeg (~80.0 MB) once.')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }))
+
+    expect(api.installTool).toHaveBeenCalledWith('ffmpeg')
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.download).mock.calls[1]).toEqual([single.sourceUrl, '0/audio', 'D:\\x\\a.mp3'])
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers ffmpeg when a running job fails for it', async () => {
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(1))
+    emit({ state: 'failed', error: { error: { code: 'tool_missing', tool: 'ffmpeg' }, detail: 'x' } })
+    await waitFor(() => expect(getRequests().map((r) => r.tool)).toEqual(['ffmpeg']))
+    getRequests()[0].settle({ tool: 'ffmpeg', installed: true, version: '7.1' })
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.download).mock.calls[1]).toEqual([single.sourceUrl, '0/audio', 'D:\\x\\a.mp3'])
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns to idle when ffmpeg is declined', async () => {
+    vi.mocked(api.download).mockRejectedValueOnce({ error: { code: 'tool_missing', tool: 'ffmpeg' }, detail: '' })
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(getRequests().length).toBe(1))
+    getRequests()[0].settle(null)
+    await waitFor(() => expect((screen.getByRole('button', { name: /Download/ }) as HTMLButtonElement).disabled).toBe(false))
+    expect(api.download).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a copy failure shows a short notice and never offers a download Retry', async () => {
+    vi.mocked(writeText).mockRejectedValueOnce(new Error('denied'))
+    render(OptionRow, { info: single, opt: opt({ id: 'sound', kind: 'original_sound', label: 'T', directUrl: 'https://cdn/s.mp3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Copy/ }))
+    await screen.findByText("Couldn't copy the link.")
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: /Download/ })).toBeTruthy()
+  })
+
+  it('a reveal failure keeps the row done', async () => {
+    vi.mocked(revealItemInDir).mockRejectedValueOnce(new Error('gone'))
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(1))
+    emit({ state: 'done', path: 'D:\\x\\a.mp3' })
+    await fireEvent.click(await screen.findByRole('button', { name: /Open folder/ }))
+    await screen.findByText("Couldn't open the folder.")
+    expect(screen.getByRole('button', { name: /Open folder/ })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 })
 

@@ -2,7 +2,14 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { t } from '../i18n'
 
-  let { onsettings }: { onsettings?: () => void } = $props()
+  let {
+    onsettings,
+    settingsOpen = false,
+  }: {
+    /** Shows the gear button; omitted while the setup screen runs. */
+    onsettings?: () => void
+    settingsOpen?: boolean
+  } = $props()
 
   // Outside Tauri (plain browser dev) there is no window to control.
   function win() {
@@ -17,9 +24,18 @@
 <header class="titlebar" data-tauri-drag-region>
   <span class="name" data-tauri-drag-region>Lumi</span>
   <div class="controls">
-    <button type="button" title={$t('titlebar.settings')} aria-label={$t('titlebar.settings')} onclick={() => onsettings?.()}>
+    {#if onsettings}
+    <button
+      type="button"
+      class:on={settingsOpen}
+      title={$t('titlebar.settings')}
+      aria-label={$t('titlebar.settings')}
+      aria-pressed={settingsOpen}
+      onclick={() => onsettings?.()}
+    >
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
     </button>
+    {/if}
     <button type="button" title={$t('titlebar.minimize')} aria-label={$t('titlebar.minimize')} onclick={() => win()?.minimize()}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" /></svg>
     </button>
@@ -34,7 +50,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 36px;
+    height: var(--titlebar-h);
+    flex-shrink: 0;
     padding-left: 14px;
     user-select: none;
   }
@@ -68,6 +85,15 @@
   button:hover {
     background: var(--glass-bg);
     color: var(--text);
+  }
+  button.on {
+    color: var(--text);
+  }
+  button.on svg {
+    transform: rotate(45deg);
+  }
+  svg {
+    transition: transform 0.3s var(--ease);
   }
   button.close:hover {
     background: #e5484d;

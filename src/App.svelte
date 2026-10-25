@@ -5,9 +5,13 @@
   import ErrorBanner from './lib/components/ErrorBanner.svelte'
   import LinkInput from './lib/components/LinkInput.svelte'
   import ResultCard from './lib/components/ResultCard.svelte'
+  import SettingsPanel from './lib/components/SettingsPanel.svelte'
+  import SetupScreen from './lib/components/SetupScreen.svelte'
   import TitleBar from './lib/components/TitleBar.svelte'
+  import ToolPrompt from './lib/components/ToolPrompt.svelte'
   import { t, type ErrorAction } from './lib/i18n'
-  import type { AccountStatus, LumiError, MediaInfo } from './lib/types'
+  import { askForTool, CORE_TOOLS, installWithProgress, isInstalled, toolRequests, toolStatuses } from './lib/tools'
+  import type { AccountStatus, LumiError, MediaInfo, Tool } from './lib/types'
 
   let url = $state('')
   let busy = $state(false)
@@ -18,11 +22,19 @@
   let lastResolved = $state('')
   let accounts = $state<AccountStatus[]>([])
 
+  /** `checking` shows the main screen while the tools are looked up; `setup` installs the missing core tools. */
+  let phase = $state<'checking' | 'setup' | 'ready'>('checking')
+  let missing = $state<Tool[]>([])
+  let settingsOpen = $state(false)
+  /** "Later" on the deno question holds for the rest of the session. */
+  let denoDeclined = false
+
   const active = $derived(busy || info !== null || error !== null)
   const connected = $derived.by(() => {
     const e = error?.error
     return e?.code === 'login_required' && accounts.some((a) => a.site === e.site && a.connected)
   })
+  const denoMissing = $derived(isInstalled($toolStatuses, 'deno') === false)
 
   async function refreshAccounts() {
     try {
@@ -32,6 +44,18 @@
     }
   }
 
+  /** Startup: the setup screen runs only when yt-dlp or gallery-dl is missing. */
+  async function checkTools() {
+    try {
+      const list = await api.toolsStatus()
+      toolStatuses.set(list)
+      missing = CORE_TOOLS.filter((tool) => isInstalled(list, tool) === false)
+    } catch {
+      // Backend unavailable: skip setup; resolve reports a missing tool with a Reinstall button.
+    }
+    phase = missing.length > 0 ? 'setup' : 'ready'
+  }
+
   async function resolveLink(link = url.trim()) {
     if (!link || busy) return
     attempted = link
@@ -39,6 +63,10 @@
     error = null
     info = null
     try {
+      // Without deno YouTube lists fewer formats; offer it once, and resolve either way.
+      if (!denoDeclined && denoMissing && api.detectSiteLocal(link) === 'youtube') {
+        if (!(await askForTool('deno'))) denoDeclined = true
+      }
       info = await api.resolve(link)
       lastResolved = link
     } catch (e) {
@@ -47,6 +75,11 @@
     } finally {
       busy = false
     }
+  }
+
+  /** "Get all qualities" on a limited result: install deno, then read the same link again. */
+  async function installDeno() {
+    if (await askForTool('deno', true)) await resolveLink(lastResolved)
   }
 
   /** Runs the side effect behind an error button; true when the failed step should run again. */
@@ -61,11 +94,11 @@
         return status.connected
       }
       case 'update':
-        await api.updateTools()
+        toolStatuses.set(await api.updateTools())
         return true
       case 'reinstall':
         if (e.code !== 'tool_missing') return false
-        await api.installTool(e.tool)
+        await installWithProgress(e.tool)
         return true
       case 'retry':
         return true
@@ -83,64 +116,87 @@
     }
   }
 
-  onMount(() => {
-    void refreshAccounts()
+  async function start() {
     if (import.meta.env.DEV) {
       // Dev-only fixtures: `?demo=tiktok` or VITE_LUMI_DEMO=tiktok:vi (see lib/dev/demo.ts).
       const name = new URLSearchParams(location.search).get('demo') ?? import.meta.env.VITE_LUMI_DEMO
       if (name) {
-        void import('./lib/dev/demo').then(({ demo }) => {
-          const d = demo(name)
-          url = d.url
-          info = d.info ?? null
-          error = d.error ?? null
-          busy = d.busy ?? false
-          if (d.info) lastResolved = d.url
-        })
+        const { demo } = await import('./lib/dev/demo')
+        const d = demo(name)
+        url = d.url
+        info = d.info ?? null
+        error = d.error ?? null
+        busy = d.busy ?? false
+        if (d.info) lastResolved = d.url
+        settingsOpen = d.settings ?? false
+        void refreshAccounts()
+        await checkTools()
+        if (d.resolve) void resolveLink(d.url)
+        if (d.after) setTimeout(d.after, 700)
+        return
       }
     }
+    void refreshAccounts()
+    await checkTools()
+  }
+
+  onMount(() => {
+    void start()
   })
 </script>
 
-<TitleBar />
-<main class:active>
-  <section class="hero">
-    <div class="mark" aria-hidden="true">
-      <svg viewBox="0 0 32 32">
-        <defs>
-          <linearGradient id="lumi-g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#8fbcff" />
-            <stop offset="1" stop-color="#f27aa8" />
-          </linearGradient>
-        </defs>
-        <path
-          fill="url(#lumi-g)"
-          d="M16 3.5c.9 5.6 3.1 8.9 7.6 10.4l1.9.6-1.9.6C19.1 16.6 16.9 19.9 16 25.5c-.9-5.6-3.1-8.9-7.6-10.4l-1.9-.6 1.9-.6C12.9 12.4 15.1 9.1 16 3.5z"
-        />
-        <circle cx="24.5" cy="24" r="2.2" fill="url(#lumi-g)" opacity=".85" />
-      </svg>
-    </div>
-    <h1>{$t('hero.title')}</h1>
-    <p class="sources">{$t('hero.sources')}</p>
-    <div class="input">
-      <LinkInput bind:value={url} {busy} {lastResolved} onsubmit={() => resolveLink()} />
-    </div>
-  </section>
-
-  {#if active}
-    <section class="results" in:fly={{ y: 10, duration: 220 }}>
-      {#if error}
-        <ErrorBanner {error} {connected} onaction={onResolveError} />
-      {:else if busy}
-        <ResultCard loading />
-      {:else if info}
-        {#key info}
-          <ResultCard {info} {accounts} onfix={fix} />
-        {/key}
-      {/if}
+<TitleBar onsettings={phase === 'setup' ? undefined : () => (settingsOpen = !settingsOpen)} {settingsOpen} />
+{#if phase === 'setup'}
+  <SetupScreen {missing} onready={() => (phase = 'ready')} />
+{:else}
+  <main class:active>
+    <section class="hero">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32">
+          <defs>
+            <linearGradient id="lumi-g" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#8fbcff" />
+              <stop offset="1" stop-color="#f27aa8" />
+            </linearGradient>
+          </defs>
+          <path
+            fill="url(#lumi-g)"
+            d="M16 3.5c.9 5.6 3.1 8.9 7.6 10.4l1.9.6-1.9.6C19.1 16.6 16.9 19.9 16 25.5c-.9-5.6-3.1-8.9-7.6-10.4l-1.9-.6 1.9-.6C12.9 12.4 15.1 9.1 16 3.5z"
+          />
+          <circle cx="24.5" cy="24" r="2.2" fill="url(#lumi-g)" opacity=".85" />
+        </svg>
+      </div>
+      <h1>{$t('hero.title')}</h1>
+      <p class="sources">{$t('hero.sources')}</p>
+      <div class="input">
+        <LinkInput bind:value={url} {busy} {lastResolved} onsubmit={() => resolveLink()} />
+      </div>
     </section>
-  {/if}
-</main>
+
+    {#if active}
+      <section class="results" in:fly={{ y: 10, duration: 220 }}>
+        {#if error}
+          <ErrorBanner {error} {connected} onaction={onResolveError} />
+        {:else if busy}
+          <ResultCard loading />
+        {:else if info}
+          {#key info}
+            <ResultCard {info} {accounts} onfix={fix} oninstalldeno={denoMissing ? installDeno : undefined} />
+          {/key}
+        {/if}
+      </section>
+    {/if}
+  </main>
+{/if}
+
+{#if settingsOpen}
+  <SettingsPanel onclose={() => (settingsOpen = false)} onaccounts={(list) => (accounts = list)} />
+{/if}
+
+<!-- One tool question at a time (ffmpeg from a row, deno before a YouTube link). -->
+{#each $toolRequests.slice(0, 1) as req (req)}
+  <ToolPrompt tool={req.tool} autostart={req.autostart} oninstalled={req.settle} onlater={() => req.settle(null)} />
+{/each}
 
 <style>
   main {

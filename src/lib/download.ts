@@ -86,12 +86,18 @@ export async function startDownload(deps: DownloadDeps, info: MediaInfo, opt: Me
   return dest === null ? null : deps.api.download(info.sourceUrl, opt.id, dest)
 }
 
-/** Folder picker, then download every item into it. null = cancelled. */
-export async function startDownloadAll(deps: DownloadDeps, info: MediaInfo): Promise<string | null> {
+/** Folder picker for "Download all", starting at the remembered folder. null = cancelled. */
+export async function pickDir(deps: DownloadDeps): Promise<string | null> {
   const dir = await deps.open({ directory: true, defaultPath: await startDir(deps) })
   if (typeof dir !== 'string' || !dir) return null
   await rememberDir(deps, dir)
-  return deps.api.downloadAll(info.sourceUrl, dir)
+  return dir
+}
+
+/** Folder picker, then download every item into it. null = cancelled. */
+export async function startDownloadAll(deps: DownloadDeps, info: MediaInfo): Promise<string | null> {
+  const dir = await pickDir(deps)
+  return dir === null ? null : deps.api.downloadAll(info.sourceUrl, dir)
 }
 
 /** What a download control shows. */

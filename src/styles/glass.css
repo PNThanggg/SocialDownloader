@@ -25,6 +25,11 @@
   --radius: 12px;
   --radius-sm: 9px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --titlebar-h: 36px;
+  /* Dims the screen behind a dialog or the settings sheet. */
+  --scrim: rgba(8, 9, 14, 0.46);
+  /* Sheets sit over busy content, so they are more opaque than inline glass. */
+  --sheet-bg: rgba(27, 29, 40, 0.97);
 }
 
 *,

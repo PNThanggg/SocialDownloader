@@ -2,10 +2,12 @@
   import { writeText } from '@tauri-apps/plugin-clipboard-manager'
   import { revealItemInDir } from '@tauri-apps/plugin-opener'
   import { onMount } from 'svelte'
+  import { slide } from 'svelte/transition'
   import * as api from '../api'
   import { JobFollower, pickDest, realDeps, viewOf, type JobView } from '../download'
   import { formatSize } from '../format'
   import { t, type ErrorAction, type MessageKey } from '../i18n'
+  import { askForTool } from '../tools'
   import type { AccountStatus, LumiError, MediaInfo, MediaOption, OptionKind } from '../types'
   import ErrorBanner from './ErrorBanner.svelte'
 
@@ -23,12 +25,21 @@
   } = $props()
 
   let view = $state<JobView>({ s: 'idle' })
-  /** The file chosen in Save as; kept so a retry (or Task 13's ffmpeg install) reuses it. */
+  /** The file chosen in Save as; kept so a retry or the ffmpeg install reuses it. */
   let dest: string | null = $state(null)
   let copied = $state(false)
   let cancelling = $state(false)
+  /** A short message for a side action (copy, open folder, cancel) that failed; the view stays as it was. */
+  let notice = $state<MessageKey | null>(null)
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
   const follower = new JobFollower((e) => {
+    if (e.state === 'failed' && needsFfmpeg(e.error)) {
+      follower.stop()
+      cancelling = false
+      void offerFfmpeg()
+      return
+    }
     view = viewOf(e)
     if (e.state === 'done' || e.state === 'failed' || e.state === 'cancelled') {
       follower.stop()
@@ -42,9 +53,25 @@
     subscribed = unlisten
     return () => {
       follower.stop()
-      void unlisten.then((off) => off())
+      clearTimeout(noticeTimer)
+      void unlisten.then((off) => off()).catch(() => {})
     }
   })
+
+  function flash(key: MessageKey) {
+    notice = key
+    clearTimeout(noticeTimer)
+    noticeTimer = setTimeout(() => (notice = null), 3500)
+  }
+
+  const needsFfmpeg = (e: LumiError) => e.error.code === 'tool_missing' && e.error.tool === 'ffmpeg'
+
+  /** Asks to install ffmpeg; once installed, downloads to the kept dest (no second Save as). */
+  async function offerFfmpeg() {
+    view = { s: 'busy' }
+    if (await askForTool('ffmpeg')) await run()
+    else view = { s: 'idle' }
+  }
 
   const TAG_TONE: Record<OptionKind, string> = { video: 'mp4', audio: 'mp3', original_sound: 'mp3', image: 'img' }
   const tag = $derived(opt.kind === 'audio' || opt.kind === 'original_sound' ? 'MP3' : opt.ext.toUpperCase())
@@ -86,8 +113,8 @@
       await writeText(opt.directUrl)
       copied = true
       setTimeout(() => (copied = false), 1600)
-    } catch (e) {
-      view = { s: 'error', error: api.normalize(e) }
+    } catch {
+      flash('notice.copyFailed')
     }
   }
 
@@ -116,7 +143,9 @@
       follower.follow(await api.download(info.sourceUrl, opt.id, dest))
     } catch (e) {
       follower.stop()
-      view = { s: 'error', error: api.normalize(e) }
+      const error = api.normalize(e)
+      if (needsFfmpeg(error)) await offerFfmpeg()
+      else view = { s: 'error', error }
     }
   }
 
@@ -128,6 +157,7 @@
       await api.cancelJob(id)
     } catch {
       cancelling = false
+      flash('notice.cancelFailed')
     }
   }
 
@@ -136,7 +166,8 @@
     const error = view.error
     try {
       const again = action === 'retry' || ((await onfix?.(action, error)) ?? false)
-      if (again) await run()
+      // No dest yet means Save as itself failed, so start over from the dialog.
+      if (again) await (dest === null ? download() : run())
     } catch (e) {
       view = { s: 'error', error: api.normalize(e) }
     }
@@ -145,8 +176,8 @@
   async function reveal(path: string) {
     try {
       await revealItemInDir(path)
-    } catch (e) {
-      view = { s: 'error', error: api.normalize(e) }
+    } catch {
+      flash('notice.revealFailed')
     }
   }
 </script>
@@ -239,6 +270,12 @@
     <div class="err">
       <ErrorBanner error={view.error} {connected} compact onaction={onerror} />
     </div>
+  {/if}
+  {#if notice}
+    <p class="notice" role="status" transition:slide={{ duration: 160 }}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></svg>
+      {$t(notice)}
+    </p>
   {/if}
 </div>
 
@@ -378,5 +415,23 @@
   }
   .err {
     margin-top: 8px;
+  }
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 2px 0;
+    font-size: 12px;
+    color: var(--danger);
+  }
+  .notice svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
   }
 </style>

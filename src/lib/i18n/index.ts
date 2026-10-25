@@ -25,6 +25,9 @@ const TOOL_NAMES: Record<Tool, string> = {
   deno: 'deno',
 }
 
+/** Display name of a tool (`yt-dlp`), the same in every language. */
+export const toolName = (tool: Tool): string => TOOL_NAMES[tool]
+
 export function detectLocale(nav: string): Locale {
   return nav.toLowerCase().startsWith('vi') ? 'vi' : 'en'
 }

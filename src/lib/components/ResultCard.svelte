@@ -1,10 +1,12 @@
 <script lang="ts">
   import { revealItemInDir } from '@tauri-apps/plugin-opener'
   import { onMount } from 'svelte'
+  import { slide } from 'svelte/transition'
   import * as api from '../api'
-  import { JobFollower, realDeps, startDownloadAll, viewOf, type JobView } from '../download'
+  import { JobFollower, pickDir, realDeps, viewOf, type JobView } from '../download'
   import { formatDuration } from '../format'
-  import { t, type ErrorAction } from '../i18n'
+  import { t, type ErrorAction, type MessageKey } from '../i18n'
+  import { askForTool } from '../tools'
   import type { AccountStatus, LumiError, MediaInfo, MediaOption, OptionKind } from '../types'
   import ErrorBanner from './ErrorBanner.svelte'
   import ImageGrid from './ImageGrid.svelte'
@@ -15,13 +17,26 @@
     loading = false,
     accounts = [],
     onfix,
+    oninstalldeno,
   }: {
     info?: MediaInfo | null
     /** Shows the skeleton instead of `info`. */
     loading?: boolean
     accounts?: AccountStatus[]
     onfix?: (action: ErrorAction, error: LumiError) => Promise<boolean>
+    /** Shown next to "Not all qualities available" when deno can still be installed. */
+    oninstalldeno?: () => unknown
   } = $props()
+
+  let installingDeno = $state(false)
+  async function installDeno() {
+    installingDeno = true
+    try {
+      await oninstalldeno?.()
+    } finally {
+      installingDeno = false
+    }
+  }
 
   let thumb: string | null = $state(null)
   let selected = $state(0)
@@ -57,9 +72,21 @@
 
   // "Download all" job.
   let all = $state<JobView>({ s: 'idle' })
+  /** The folder chosen for "Download all"; kept so a retry or the ffmpeg install reuses it. */
+  let allDir: string | null = null
+  let cancelling = $state(false)
+  let notice = $state<MessageKey | null>(null)
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined
+
+  const needsFfmpeg = (e: LumiError) => e.error.code === 'tool_missing' && e.error.tool === 'ffmpeg'
+
   const follower = new JobFollower((e) => {
-    all = viewOf(e)
-    if (e.state === 'done' || e.state === 'failed' || e.state === 'cancelled') follower.stop()
+    if (e.state === 'done' || e.state === 'failed' || e.state === 'cancelled') {
+      follower.stop()
+      cancelling = false
+    }
+    if (e.state === 'failed' && needsFfmpeg(e.error)) void offerFfmpeg()
+    else all = viewOf(e)
   })
   let subscribed: Promise<unknown> = Promise.resolve()
   onMount(() => {
@@ -67,27 +94,72 @@
     subscribed = unlisten
     return () => {
       follower.stop()
-      void unlisten.then((off) => off())
+      clearTimeout(noticeTimer)
+      void unlisten.then((off) => off()).catch(() => {})
     }
   })
+
+  function flash(key: MessageKey) {
+    notice = key
+    clearTimeout(noticeTimer)
+    noticeTimer = setTimeout(() => (notice = null), 3500)
+  }
 
   async function downloadAll() {
     if (!info) return
     all = { s: 'busy' }
     try {
-      await subscribed
-      follower.arm()
-      const id = await startDownloadAll(await realDeps(), info)
-      if (id === null) {
-        follower.stop()
+      const dir = await pickDir(await realDeps())
+      if (dir === null) {
         all = { s: 'idle' }
-      } else {
-        if (all.s === 'busy') all = { s: 'running', fraction: null }
-        follower.follow(id)
+        return
       }
+      allDir = dir
+      await runAll()
+    } catch (e) {
+      all = { s: 'error', error: api.normalize(e) }
+    }
+  }
+
+  /** Starts "Download all" into the kept folder. */
+  async function runAll() {
+    if (!info || allDir === null) return
+    await subscribed
+    follower.arm()
+    all = { s: 'running', fraction: null }
+    try {
+      follower.follow(await api.downloadAll(info.sourceUrl, allDir))
     } catch (e) {
       follower.stop()
-      all = { s: 'error', error: api.normalize(e) }
+      const error = api.normalize(e)
+      if (needsFfmpeg(error)) await offerFfmpeg()
+      else all = { s: 'error', error }
+    }
+  }
+
+  async function offerFfmpeg() {
+    all = { s: 'busy' }
+    if (await askForTool('ffmpeg')) await runAll()
+    else all = { s: 'idle' }
+  }
+
+  async function cancelAll() {
+    const id = follower.jobId
+    if (!id) return
+    cancelling = true
+    try {
+      await api.cancelJob(id)
+    } catch {
+      cancelling = false
+      flash('notice.cancelFailed')
+    }
+  }
+
+  async function revealAll(path: string) {
+    try {
+      await revealItemInDir(path)
+    } catch {
+      flash('notice.revealFailed')
     }
   }
 
@@ -95,7 +167,7 @@
     if (all.s !== 'error') return
     const error = all.error
     try {
-      if (action === 'retry' || (await onfix?.(action, error))) await downloadAll()
+      if (action === 'retry' || (await onfix?.(action, error))) await (allDir === null ? downloadAll() : runAll())
     } catch (e) {
       all = { s: 'error', error: api.normalize(e) }
     }
@@ -136,10 +208,18 @@
         <h2 title={info.title}>{info.title || $t('label.untitled')}</h2>
         {#if meta}<p class="meta">{meta}</p>{/if}
         {#if info.limitedFormats}
-          <span class="chip">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8v.01" /></svg>
-            {$t('note.limited')}
-          </span>
+          <div class="limited">
+            <span class="chip">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8v.01" /></svg>
+              {$t('note.limited')}
+            </span>
+            {#if oninstalldeno}
+              <button type="button" class="chip-btn" disabled={installingDeno} onclick={installDeno}>
+                {#if installingDeno}<span class="spinner"></span>{/if}
+                {$t('btn.getAllQualities')}
+              </button>
+            {/if}
+          </div>
         {/if}
       </div>
     </header>
@@ -153,12 +233,12 @@
               <div class="fill" style:width={allPct === null ? undefined : `${allPct}%`}></div>
             </div>
             <span class="pct">{allPct === null ? '' : `${allPct}%`}</span>
-            <button type="button" class="btn btn-ghost" onclick={() => follower.jobId && api.cancelJob(follower.jobId).catch(() => {})}>
+            <button type="button" class="btn btn-ghost" disabled={cancelling} onclick={cancelAll}>
               {$t('action.cancel')}
             </button>
           {:else if all.s === 'done'}
             {@const path = all.path}
-            <button type="button" class="btn btn-ghost" onclick={() => revealItemInDir(path).catch(() => {})}>
+            <button type="button" class="btn btn-ghost" onclick={() => revealAll(path)}>
               <svg viewBox="0 0 24 24" aria-hidden="true"
                 ><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" /></svg
               >
@@ -179,6 +259,12 @@
       </div>
       {#if all.s === 'error'}
         <ErrorBanner error={all.error} compact onaction={onAllError} />
+      {/if}
+      {#if notice}
+        <p class="notice" role="status" transition:slide={{ duration: 160 }}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5.5M12 16.5v.01" /></svg>
+          {$t(notice)}
+        </p>
       {/if}
       <ImageGrid items={info.items} site={info.site} selected={shown} onselect={(i) => (selected = i)} />
     {/if}
@@ -275,6 +361,57 @@
     border: 1px solid var(--glass-border-soft);
     font-size: 11.5px;
     color: var(--muted);
+  }
+  .limited {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .limited .chip {
+    margin-top: 0;
+  }
+  .chip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 20px;
+    border: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.14);
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: background-color 0.15s var(--ease);
+  }
+  .chip-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.22);
+  }
+  .chip-btn:disabled {
+    opacity: 0.6;
+  }
+  .chip-btn .spinner {
+    width: 11px;
+    height: 11px;
+    border-width: 1.6px;
+  }
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: -4px 0 0;
+    font-size: 12px;
+    color: var(--danger);
+  }
+  .notice svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
   }
   .chip svg {
     width: 12px;

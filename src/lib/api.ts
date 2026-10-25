@@ -23,8 +23,16 @@ export function normalize(e: unknown): LumiError {
   return { error: { code: 'unknown' }, detail: String(e) }
 }
 
+/** Answers a command instead of the backend, or returns undefined to let it through. */
+export type DemoBackend = (cmd: string, args?: Record<string, unknown>) => Promise<unknown> | undefined
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   try {
+    // Dev-only `?demo=…` fakes (lib/dev/demo.ts); the whole branch folds away in production builds.
+    const faked = import.meta.env.DEV
+      ? (globalThis as { __lumiDemoBackend?: DemoBackend }).__lumiDemoBackend?.(cmd, args)
+      : undefined
+    if (faked) return (await faked) as T
     return await invoke<T>(cmd, args)
   } catch (e) {
     throw normalize(e)
