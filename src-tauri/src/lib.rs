@@ -1,5 +1,7 @@
+mod errors;
 mod model;
 mod site;
+mod tools;
 mod window_fx;
 
 use tauri::Manager;
