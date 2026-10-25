@@ -1,3 +1,5 @@
+mod model;
+mod site;
 mod window_fx;
 
 use tauri::Manager;
