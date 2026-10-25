@@ -28,7 +28,7 @@ Success means: copy a link → paste into Lumi → a few seconds later the optio
 
 **Out of scope for the first version** **[Claude]**, user has not objected
 - Whole playlists/channels, multiple links at once, queues.
-- Download history.
+- ~~Download history.~~ Added 2026-10-26 **[User]**, see §4.7.
 - macOS/Linux. Windows 10/11 x64 only.
 - In-app Facebook/Instagram browsing (mode B). It has its own spec: `2026-10-25-lumi-browse-mode-design.md` **[User]**. Mode A must leave room to plug mode B in (see §8).
 - Self-update of the Lumi app itself. Only the bundled tools update (see §5).
@@ -100,6 +100,13 @@ The user picked from mockups: **layout A, a single compact screen** and **froste
 - The primary button is near-solid white with dark text. Format tags have their own colors: MP3 green, MP4 blue, image orange.
 - *[Claude]* Custom (frameless) title bar with minimize/close buttons, draggable.
 - Reference mockup: `.superpowers/brainstorm/*/content/style.html`, the "glass" option. That folder is not committed to git. The description above is all the implementer needs.
+
+### 4.7 Download history (added 2026-10-26)
+- **[User]** Keep a download history with the **post's original link** (the TikTok/YouTube… post, not the CDN URL, which expires). To download again later, use that link.
+- *[Claude]* A clock button in the title bar (next to the gear) opens a **Download history** sheet that slides in from the right like Settings. Only one sheet is open at a time.
+- *[Claude]* One row per link, newest first: title, shortened link, the formats saved (MP3/MP4/JPG/All), and when ("5 minutes ago"). Downloading from the same link again moves its row to the top and merges the formats. At most 300 links are kept.
+- *[Claude]* **Download again** closes the sheet, puts the link in the input and reads it from scratch (fresh CDN URLs); the user picks a row to download as usual. Rows also have **Open folder** (the last file saved) and **Remove from history**; **Clear all** takes a second click instead of a dialog.
+- *[Claude]* The Rust side records history when a download finishes (so mode B downloads are recorded too), in `%LOCALAPPDATA%\Lumi\history.json`, then emits `lumi://history`. A corrupt file is renamed to `history.json.bad`, never overwritten.
 
 ## 5. Bundled tools: download and update
 

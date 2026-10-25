@@ -16,5 +16,6 @@ Cài bằng `src-tauri\target\release\bundle\nsis\Lumi_0.1.0_x64-setup.exe` (ho�
 12. **Thiếu yt-dlp khi đang chạy:** xoá `%LOCALAPPDATA%\Lumi\bin\yt-dlp.exe` lúc app mở, dán link → "Thiếu công cụ yt-dlp." + **Cài lại công cụ** → bấm vào dùng lại bình thường.
 13. **Ngôn ngữ:** Settings → English / Tiếng Việt / Tự động → chữ đổi ngay, mở lại app vẫn giữ.
 14. **Giao diện sáng của Windows:** đổi Windows sang Light mode → nền kính của Lumi vẫn tối, chữ đọc rõ.
-15. **Một bản duy nhất:** mở Lumi lần hai → chỉ cửa sổ cũ được đưa lên.
-16. Khôi phục: xoá thư mục Lumi mới, đổi `Lumi.bak` về `Lumi` nếu muốn giữ dữ liệu cũ.
+15. **Lịch sử tải:** tải MP3 rồi MP4 của cùng một link TikTok → bấm nút đồng hồ trên thanh tiêu đề → chỉ có một dòng, có nhãn MP4 và MP3, ghi "vừa xong"/"x phút trước". Bấm **Mở thư mục** → Explorer chọn đúng file. Bấm **Tải lại** → bảng đóng, link nằm trong ô nhập và được đọc lại, tải được bình thường. Đóng rồi mở lại app → lịch sử vẫn còn. **Xóa hết** phải bấm hai lần.
+16. **Một bản duy nhất:** mở Lumi lần hai → chỉ cửa sổ cũ được đưa lên.
+17. Khôi phục: xoá thư mục Lumi mới, đổi `Lumi.bak` về `Lumi` nếu muốn giữ dữ liệu cũ.

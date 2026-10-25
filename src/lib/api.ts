@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type {
   AccountStatus,
+  HistoryEntry,
   JobEvent,
   LumiError,
   MediaInfo,
@@ -46,6 +47,11 @@ export const download = (url: string, optionId: string, dest: string) =>
 export const downloadAll = (url: string, destDir: string) => call<string>('download_all', { url, destDir })
 export const cancelJob = (jobId: string) => call<void>('cancel_job', { jobId })
 
+/** Every finished download is recorded by Rust; these only read and prune the list. */
+export const historyList = () => call<HistoryEntry[]>('history_list')
+export const historyRemove = (url: string) => call<void>('history_remove', { url })
+export const historyClear = () => call<void>('history_clear')
+
 /** Every tool with its version (runs each one: slow). */
 export const toolsStatus = () => call<ToolStatus[]>('tools_status')
 /** Which tools are on disk, versions left null (fast: the startup check). */
@@ -67,6 +73,8 @@ export const onJob = (cb: (e: JobEvent) => void): Promise<UnlistenFn> =>
   listen<JobEvent>('lumi://job', (ev) => cb(ev.payload))
 export const onToolProgress = (cb: (p: ToolProgress) => void): Promise<UnlistenFn> =>
   listen<ToolProgress>('lumi://tool-progress', (ev) => cb(ev.payload))
+/** The history changed (a download finished, or an entry was removed). */
+export const onHistory = (cb: () => void): Promise<UnlistenFn> => listen('lumi://history', () => cb())
 
 const SITE_HOSTS: [string, Site][] = [
   ['tiktok.com', 'tiktok'],

@@ -5,10 +5,15 @@
   let {
     onsettings,
     settingsOpen = false,
+    onhistory,
+    historyOpen = false,
   }: {
     /** Shows the gear button; omitted while the setup screen runs. */
     onsettings?: () => void
     settingsOpen?: boolean
+    /** Shows the history button; omitted while the setup screen runs. */
+    onhistory?: () => void
+    historyOpen?: boolean
   } = $props()
 
   // Outside Tauri (plain browser dev) there is no window to control.
@@ -24,6 +29,19 @@
 <header class="titlebar" data-tauri-drag-region>
   <span class="name" data-tauri-drag-region>Lumi</span>
   <div class="controls">
+    {#if onhistory}
+    <button
+      type="button"
+      class="history"
+      class:on={historyOpen}
+      title={$t('titlebar.history')}
+      aria-label={$t('titlebar.history')}
+      aria-pressed={historyOpen}
+      onclick={() => onhistory?.()}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3.5 4.5V9H8" /><path d="M12 7.5V12l3 2" /></svg>
+    </button>
+    {/if}
     {#if onsettings}
     <button
       type="button"
@@ -91,6 +109,9 @@
   }
   button.on svg {
     transform: rotate(45deg);
+  }
+  button.history.on svg {
+    transform: rotate(-30deg);
   }
   svg {
     transition: transform 0.3s var(--ease);

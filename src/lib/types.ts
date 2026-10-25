@@ -80,6 +80,22 @@ export interface AccountStatus {
   connected: boolean;
 }
 
+/** One post link in the download history (newest first). */
+export interface HistoryEntry {
+  /** The post's own link, read again by "Download again" (never the expiring direct URL). */
+  url: string;
+  site: Site;
+  /** Empty when the title wasn't known. */
+  title: string;
+  author: string | null;
+  /** What was saved from it, most recent first: a file extension (`mp4`, `mp3`) or `all`. */
+  formats: string[];
+  /** The last file (or folder, for "Download all") saved from it. */
+  path: string;
+  /** Unix milliseconds of the last download. */
+  at: number;
+}
+
 export type JobState =
   | { state: 'started' }
   | { state: 'progress'; fraction: number | null }

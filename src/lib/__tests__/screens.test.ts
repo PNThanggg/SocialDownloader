@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AccountStatus, LumiError, MediaInfo, Tool, ToolProgress, ToolStatus, ToolUpdateReport } from '../types'
+import type { AccountStatus, HistoryEntry, LumiError, MediaInfo, Tool, ToolProgress, ToolStatus, ToolUpdateReport } from '../types'
 
 // jsdom has no Web Animations API; Svelte transitions call element.animate and wait for onfinish.
 Element.prototype.animate ??= function () {
@@ -14,6 +14,7 @@ const MB = 1024 * 1024
 
 const h = vi.hoisted(() => ({
   progress: [] as ((p: ToolProgress) => void)[],
+  history: [] as (() => void)[],
   kv: new Map<string, unknown>(),
 }))
 
@@ -46,6 +47,15 @@ vi.mock('../api', async (importOriginal) => {
     accountsStatus: vi.fn(async () => []),
     connectAccount: vi.fn(),
     disconnectAccount: vi.fn(async () => {}),
+    historyList: vi.fn(async () => []),
+    historyRemove: vi.fn(async () => {}),
+    historyClear: vi.fn(async () => {}),
+    onHistory: vi.fn(async (cb: () => void) => {
+      h.history.push(cb)
+      return () => {
+        h.history = h.history.filter((l) => l !== cb)
+      }
+    }),
   }
 })
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ minimize: vi.fn(), close: vi.fn() }) }))
@@ -61,9 +71,11 @@ vi.mock('@tauri-apps/plugin-store', () => ({
   })),
 }))
 
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import App from '../../App.svelte'
 import { accountActions, accountErrors, accounts, connectAccount } from '../accounts'
 import * as api from '../api'
+import HistoryPanel from '../components/HistoryPanel.svelte'
 import SettingsPanel from '../components/SettingsPanel.svelte'
 import SetupScreen from '../components/SetupScreen.svelte'
 import ToolPrompt from '../components/ToolPrompt.svelte'
@@ -97,6 +109,7 @@ beforeEach(() => {
   language.set('en')
   h.kv.clear()
   h.progress = []
+  h.history = []
   toolRequests.set([])
   toolStatuses.set(null)
   accounts.set([])
@@ -539,5 +552,105 @@ describe('SettingsPanel', () => {
     expect(onclose).toHaveBeenCalledTimes(1)
     await fireEvent.click(container.querySelector('.backdrop')!)
     expect(onclose).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('HistoryPanel', () => {
+  const entry = (o: Partial<HistoryEntry> & Pick<HistoryEntry, 'url'>): HistoryEntry => ({
+    site: 'tiktok',
+    title: 'Evening chill',
+    author: '@a',
+    formats: ['mp3'],
+    path: 'D:\\x\\a.mp3',
+    at: Date.now() - 5 * 60_000,
+    ...o,
+  })
+  const tiktok = entry({ url: 'https://www.tiktok.com/@a/video/1', formats: ['mp3', 'mp4'] })
+  const yt = entry({ url: 'https://www.youtube.com/watch?v=x', site: 'youtube', title: '', formats: ['all'], path: 'D:\\x' })
+
+  const rowOf = async (url: string) => {
+    await screen.findByText('Evening chill')
+    return document.querySelector(`[data-url="${url}"]`) as HTMLElement
+  }
+
+  it('lists each link with what was saved, and offers to download it again', async () => {
+    vi.mocked(api.historyList).mockResolvedValue([tiktok, yt])
+    const onagain = vi.fn()
+    render(HistoryPanel, { onclose: vi.fn(), onagain })
+    const row = await rowOf(tiktok.url)
+    expect(within(row).getByText('tiktok.com/@a/video/1')).toBeTruthy()
+    expect(within(row).getByText('MP3')).toBeTruthy()
+    expect(within(row).getByText('MP4')).toBeTruthy()
+    expect(within(row).getByText('5 minutes ago')).toBeTruthy()
+    const other = document.querySelector(`[data-url="${yt.url}"]`) as HTMLElement
+    expect(within(other).getByText('Untitled')).toBeTruthy()
+    expect(within(other).getByText('All')).toBeTruthy()
+
+    await fireEvent.click(within(row).getByRole('button', { name: 'Download again' }))
+    expect(onagain).toHaveBeenCalledWith(tiktok.url)
+    await fireEvent.click(within(other).getByRole('button', { name: 'Open folder' }))
+    expect(revealItemInDir).toHaveBeenCalledWith('D:\\x')
+  })
+
+  it('waits for a link being read before downloading again', async () => {
+    vi.mocked(api.historyList).mockResolvedValue([tiktok])
+    render(HistoryPanel, { onclose: vi.fn(), onagain: vi.fn(), busy: true })
+    const row = await rowOf(tiktok.url)
+    expect((within(row).getByRole('button', { name: 'Download again' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('removes one entry, and clears all only on a second click', async () => {
+    vi.mocked(api.historyList).mockResolvedValue([tiktok, yt])
+    render(HistoryPanel, { onclose: vi.fn(), onagain: vi.fn() })
+    await fireEvent.click(within(await rowOf(tiktok.url)).getByRole('button', { name: 'Remove from history' }))
+    expect(api.historyRemove).toHaveBeenCalledWith(tiktok.url)
+    await waitFor(() => expect(screen.queryByText('Evening chill')).toBeNull())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear all' }))
+    expect(api.historyClear).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Click again to clear all' }))
+    expect(api.historyClear).toHaveBeenCalledTimes(1)
+    await screen.findByText('Nothing downloaded yet. Files you download show up here.')
+  })
+
+  it('reloads when a download finishes while it is open', async () => {
+    vi.mocked(api.historyList).mockResolvedValueOnce([]).mockResolvedValueOnce([tiktok])
+    render(HistoryPanel, { onclose: vi.fn(), onagain: vi.fn() })
+    await screen.findByText('Nothing downloaded yet. Files you download show up here.')
+    await waitFor(() => expect(h.history.length).toBe(1))
+    h.history.forEach((l) => l())
+    await screen.findByText('Evening chill')
+  })
+
+  it('says so when the history cannot be read', async () => {
+    vi.mocked(api.historyList).mockRejectedValue(network)
+    render(HistoryPanel, { onclose: vi.fn(), onagain: vi.fn() })
+    await screen.findByText("Couldn't update the history.")
+  })
+})
+
+describe('App history', () => {
+  it('Download again puts the original link back in the input and reads it', async () => {
+    const link = 'https://www.tiktok.com/@a/video/1'
+    vi.mocked(api.toolsInstalled).mockResolvedValue([status('yt_dlp'), status('gallery_dl'), status('ffmpeg'), status('deno')])
+    vi.mocked(api.historyList).mockResolvedValue([
+      { url: link, site: 'tiktok', title: 'Evening chill', author: null, formats: ['mp3'], path: 'D:\\a.mp3', at: Date.now() },
+    ])
+    vi.mocked(api.resolve).mockRejectedValue(network)
+    vi.mocked(api.toolsStatus).mockResolvedValue([])
+    render(App)
+    await waitFor(() => expect(get(toolStatuses)).not.toBeNull())
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    // Opening one sheet closes the other.
+    await fireEvent.click(screen.getByRole('button', { name: 'Download history' }))
+    await screen.findByRole('heading', { name: 'Download history' })
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Settings' })).toBeNull())
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Download again' }))
+    await waitFor(() => expect(api.resolve).toHaveBeenCalledWith(link))
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe(link)
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Download history' })).toBeNull())
   })
 })

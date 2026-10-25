@@ -4,6 +4,7 @@
   import { accounts, connectAccount, isConnected, refreshAccounts } from './lib/accounts'
   import * as api from './lib/api'
   import ErrorBanner from './lib/components/ErrorBanner.svelte'
+  import HistoryPanel from './lib/components/HistoryPanel.svelte'
   import LinkInput from './lib/components/LinkInput.svelte'
   import ResultCard from './lib/components/ResultCard.svelte'
   import SettingsPanel from './lib/components/SettingsPanel.svelte'
@@ -26,6 +27,7 @@
   let phase = $state<'checking' | 'setup' | 'ready'>('checking')
   let missing = $state<Tool[]>([])
   let settingsOpen = $state(false)
+  let historyOpen = $state(false)
   /** "Later" on the deno question holds for the rest of the session. */
   let denoDeclined = false
 
@@ -76,6 +78,20 @@
     } finally {
       busy = false
     }
+  }
+
+  /** History → "Download again": the post's link goes back in the input and is read afresh. */
+  function downloadAgain(link: string) {
+    historyOpen = false
+    url = link
+    void resolveLink(link)
+  }
+
+  /** One sheet at a time. */
+  function toggleSheet(sheet: 'settings' | 'history') {
+    const open = sheet === 'settings' ? !settingsOpen : !historyOpen
+    settingsOpen = sheet === 'settings' && open
+    historyOpen = sheet === 'history' && open
   }
 
   /** "Get all qualities" on a limited result: install deno, then read the same link again. */
@@ -134,6 +150,7 @@
         busy = d.busy ?? false
         if (d.info) lastResolved = d.url
         settingsOpen = d.settings ?? false
+        historyOpen = d.history ?? false
         void refreshAccounts()
         await checkTools()
         if (d.resolve) void resolveLink(d.url)
@@ -150,7 +167,12 @@
   })
 </script>
 
-<TitleBar onsettings={phase === 'setup' ? undefined : () => (settingsOpen = !settingsOpen)} {settingsOpen} />
+<TitleBar
+  onsettings={phase === 'setup' ? undefined : () => toggleSheet('settings')}
+  {settingsOpen}
+  onhistory={phase === 'setup' ? undefined : () => toggleSheet('history')}
+  {historyOpen}
+/>
 {#if phase === 'setup'}
   <SetupScreen {missing} onready={() => (phase = 'ready')} />
 {:else}
@@ -202,6 +224,10 @@
 
 {#if settingsOpen}
   <SettingsPanel onclose={() => (settingsOpen = false)} />
+{/if}
+
+{#if historyOpen}
+  <HistoryPanel onclose={() => (historyOpen = false)} onagain={downloadAgain} {busy} />
 {/if}
 
 <!-- One tool question at a time (ffmpeg from a row, deno before a YouTube link). -->

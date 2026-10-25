@@ -57,11 +57,14 @@ pub trait JobSink: Send + Sync + 'static {
     fn emit(&self, e: JobEvent);
 }
 
-/// Broadcasts to every window.
+/// Broadcasts to every window; a finished download is added to the history first.
 pub struct TauriSink(pub AppHandle);
 
 impl JobSink for TauriSink {
     fn emit(&self, e: JobEvent) {
+        if let JobState::Done { path } = &e.state {
+            crate::history::record_done(&self.0, &e.url, &e.option_id, path);
+        }
         let _ = self.0.emit("lumi://job", e);
     }
 }

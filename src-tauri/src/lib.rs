@@ -1,6 +1,7 @@
 mod accounts;
 mod download;
 mod errors;
+mod history;
 mod model;
 mod resolve;
 mod site;
@@ -28,6 +29,7 @@ pub fn run() {
         .manage(tools::ToolsState::default())
         .manage(resolve::ResolveCache::default())
         .manage(download::jobs::JobManager::default())
+        .manage(history::History::new(history::History::default_file()))
         .invoke_handler(tauri::generate_handler![
             accounts::accounts_status,
             accounts::connect_account,
@@ -42,6 +44,9 @@ pub fn run() {
             download::jobs::download,
             download::jobs::download_all,
             download::jobs::cancel_job,
+            history::history_list,
+            history::history_remove,
+            history::history_clear,
             resolve::resolve,
             thumb::fetch_thumbnail
         ])

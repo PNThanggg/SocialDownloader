@@ -4,7 +4,7 @@ import { emit } from '@tauri-apps/api/event'
 import type { DemoBackend } from '../api'
 import { language } from '../i18n'
 import { askForTool } from '../tools'
-import type { AccountStatus, LumiError, MediaInfo, Tool, ToolStatus } from '../types'
+import type { AccountStatus, HistoryEntry, LumiError, MediaInfo, Tool, ToolStatus } from '../types'
 
 export interface Demo {
   url: string
@@ -13,6 +13,8 @@ export interface Demo {
   busy?: boolean
   /** Open the settings sheet. */
   settings?: boolean
+  /** Open the history sheet. */
+  history?: boolean
   /** Run the real resolve flow on `url` once the app is ready. */
   resolve?: boolean
   /** Runs shortly after the screen is up (e.g. to raise a tool prompt). */
@@ -211,6 +213,23 @@ export function demo(spec: string): Demo {
         info: tiktok,
         after: () => void askForTool('ffmpeg', name === 'prompt-install' || name === 'prompt-error'),
       }
+    case 'history': {
+      const ago = (mins: number) => Date.now() - mins * 60_000
+      let entries: HistoryEntry[] = [
+        { url: tiktok.sourceUrl, site: 'tiktok', title: tiktok.title, author: tiktok.author, formats: ['mp3', 'mp4'], path: 'C:\\Users\\me\\Downloads\\chill.mp3', at: ago(4) },
+        { url: instagram.sourceUrl, site: 'instagram', title: instagram.title, author: instagram.author, formats: ['all'], path: 'C:\\Users\\me\\Pictures', at: ago(180) },
+        { url: youtube.sourceUrl, site: 'youtube', title: youtube.title, author: youtube.author, formats: ['mp4'], path: 'D:\\Video\\mix.mp4', at: ago(60 * 30) },
+        { url: 'https://www.facebook.com/reel/1234567890', site: 'facebook', title: '', author: null, formats: ['mp4'], path: 'D:\\Video\\reel.mp4', at: ago(60 * 24 * 12) },
+      ]
+      backend({
+        tools_status: () => tools(),
+        history_list: () => entries,
+        history_remove: (args) => void (entries = entries.filter((e) => e.url !== args?.url)),
+        history_clear: () => void (entries = []),
+        resolve: async (args) => (await sleep(600), [tiktok, instagram, youtube].find((i) => i.sourceUrl === args?.url) ?? tiktok),
+      })
+      return { url: '', history: true }
+    }
     case 'instagram':
       return { url: instagram.sourceUrl, info: instagram }
     case 'youtube':

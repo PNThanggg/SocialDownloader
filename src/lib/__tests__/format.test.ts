@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { formatDuration, formatSize } from '../format'
+import { formatDuration, formatSize, formatWhen } from '../format'
+
+describe('formatWhen', () => {
+  const now = Date.UTC(2026, 9, 26, 12, 0)
+  const min = 60_000
+  it('is relative within a week', () => {
+    expect(formatWhen(now - 10_000, now, 'en')).toBe('this minute')
+    expect(formatWhen(now - 5 * min, now, 'en')).toBe('5 minutes ago')
+    expect(formatWhen(now - 3 * 60 * min, now, 'en')).toBe('3 hours ago')
+    expect(formatWhen(now - 26 * 60 * min, now, 'en')).toBe('yesterday')
+    expect(formatWhen(now - 5 * min, now, 'vi')).toBe('5 phút trước')
+  })
+  it('is a date from a week back, and never in the future', () => {
+    const old = now - 8 * 24 * 60 * min
+    expect(formatWhen(old, now, 'en')).toBe(new Date(old).toLocaleDateString('en'))
+    expect(formatWhen(now + 5 * min, now, 'en')).toBe('this minute')
+  })
+})
 
 describe('formatSize', () => {
   it('uses MB with one decimal', () => {

@@ -28,7 +28,7 @@ Thành công nghĩa là: copy link → dán vào Lumi → vài giây sau thấy 
 
 **Ngoài phạm vi bản đầu** **[Claude]**, người dùng chưa phản đối
 - Tải cả playlist/kênh, tải nhiều link cùng lúc, hàng đợi.
-- Lịch sử tải.
+- ~~Lịch sử tải.~~ Đã thêm ngày 2026-10-26 **[Người dùng]**, xem §4.7.
 - macOS/Linux. Chỉ làm Windows 10/11 x64.
 - Chế độ lướt Facebook/Instagram trong app (kiểu B). Phần này có tài liệu riêng: `2026-10-25-lumi-browse-mode-design.vi.md` **[Người dùng]**. Bản A phải chừa đường để gắn kiểu B vào (xem §8).
 - Tự cập nhật bản thân app Lumi. Chỉ cập nhật các công cụ bên trong (xem §5).
@@ -100,6 +100,13 @@ Người dùng đã chọn qua mockup: **bố cục A, một màn hình gọn** 
 - Nút chính màu trắng gần đặc, chữ tối. Nhãn định dạng có màu riêng: MP3 xanh lá, MP4 xanh dương, ảnh cam.
 - *[Claude]* Thanh tiêu đề tùy chỉnh (frameless), có nút thu nhỏ/đóng, kéo được.
 - Mockup tham chiếu: `.superpowers/brainstorm/*/content/style.html`, lựa chọn "glass". Thư mục này không được commit vào git. Người làm chỉ cần mô tả ở trên.
+
+### 4.7 Lịch sử tải (thêm ngày 2026-10-26)
+- **[Người dùng]** Lưu lại lịch sử tải kèm **link gốc của bài** (link bài TikTok/YouTube…, không phải link CDN vì link đó hết hạn). Lần sau muốn tải lại thì lấy chính link đó để tải.
+- *[Claude]* Nút đồng hồ trên thanh tiêu đề (cạnh bánh răng) mở bảng **Lịch sử tải**, trượt từ bên phải giống Cài đặt. Mỗi lúc chỉ mở một bảng.
+- *[Claude]* Mỗi link một dòng, mới nhất ở trên: tiêu đề, link rút gọn, các định dạng đã tải (MP3/MP4/JPG/Tất cả), thời gian ("5 phút trước"). Tải lại cùng link thì dòng đó lên đầu và gộp định dạng. Giữ tối đa 300 link.
+- *[Claude]* **Tải lại** đóng bảng, đưa link vào ô nhập rồi đọc lại link từ đầu (lấy link CDN mới), người dùng chọn dòng muốn tải như bình thường. Có thêm **Mở thư mục** (file lần tải gần nhất) và **Xóa khỏi lịch sử**; **Xóa hết** phải bấm hai lần, không dùng hộp thoại.
+- *[Claude]* Phía Rust ghi lịch sử khi một lượt tải xong (nên lượt tải từ kiểu B cũng được ghi), vào `%LOCALAPPDATA%\Lumi\history.json`, rồi phát sự kiện `lumi://history`. File hỏng thì được đổi tên thành `history.json.bad`, không bị ghi đè.
 
 ## 5. Các công cụ bên trong: tải và cập nhật
 
