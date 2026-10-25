@@ -22,6 +22,9 @@ pub fn run() {
         .manage(resolve::ResolveCache::default())
         .manage(download::jobs::JobManager::default())
         .invoke_handler(tauri::generate_handler![
+            accounts::accounts_status,
+            accounts::connect_account,
+            accounts::disconnect_account,
             window_fx::window_effect,
             tools::tools_status,
             tools::tool_download_size,
@@ -35,6 +38,8 @@ pub fn run() {
             thumb::fetch_thumbnail
         ])
         .setup(|app| {
+            // Before any job can start: drop job dirs and decrypted cookie files a crash left behind.
+            tools::paths::sweep_tmp();
             if let Some(window) = app.get_webview_window("main") {
                 window_fx::apply(&window);
             }
