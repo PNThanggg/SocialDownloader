@@ -12,6 +12,8 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use tokio::sync::Notify;
 
 use super::args::{build_plan, ffmpeg_command_args, needs_ffmpeg, FfInput, Plan, PROGRESS_TEMPLATE};
@@ -311,24 +313,55 @@ fn move_file(from: &Path, to: &Path) -> Result<(), LumiError> {
     Ok(())
 }
 
-/// Newest `<stem>.*` file next to `dest`: yt-dlp picks the extension itself.
-fn newest_with_stem(dest: &Path) -> Option<PathBuf> {
-    let stem = dest.file_stem()?.to_string_lossy().to_lowercase();
+static F_FORMAT: Lazy<Regex> = Lazy::new(|| Regex::new(r"^f[\w-]+\.\w+").expect("valid regex"));
+
+/// Whether `name` (lowercase) is an unfinished yt-dlp file for `stem`: `.part`, `.part-FragN`, `.ytdl`,
+/// `.temp.<ext>` or a per-format `.f<id>.<ext>` piece. A complete media file never is.
+fn is_partial(stem: &str, name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(stem).and_then(|r| r.strip_prefix('.')) else { return false };
+    rest.ends_with(".part")
+        || rest.contains(".part-frag")
+        || rest.ends_with(".ytdl")
+        || rest.starts_with("temp.")
+        || rest.ends_with(".temp")
+        || F_FORMAT.is_match(rest)
+}
+
+/// `<stem>.*` files next to `dest` with their mtime (lowercase stem match).
+fn stem_files(dest: &Path) -> Vec<(String, std::fs::Metadata, PathBuf)> {
+    let Some(stem) = dest.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else { return vec![] };
     let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
+    let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
+    rd.filter_map(|e| e.ok())
+        .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_lowercase();
-            name.starts_with(&format!("{stem}.")) && !name.ends_with(".part")
+            let meta = e.metadata().ok().filter(|m| m.is_file())?;
+            name.starts_with(&format!("{stem}.")).then(|| (name, meta, e.path()))
         })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .max_by_key(|(t, _)| *t)
-        .map(|(_, p)| p)
+        .collect()
+}
+
+fn written_since(meta: &std::fs::Metadata, started: SystemTime) -> bool {
+    meta.modified().is_ok_and(|m| m >= started)
+}
+
+/// The finished `<stem>.*` file this job wrote next to `dest` (yt-dlp picks the extension itself):
+/// written since `started`, never a partial, `dest`'s own extension first, else the newest.
+fn newest_with_stem(dest: &Path, started: SystemTime) -> Option<PathBuf> {
+    let stem = dest.file_stem()?.to_string_lossy().to_lowercase();
+    let want = dest.extension().map(|e| e.to_string_lossy().to_lowercase());
+    stem_files(dest)
+        .into_iter()
+        .filter(|(name, meta, _)| !is_partial(&stem, name) && written_since(meta, started))
+        .max_by_key(|(_, meta, p)| {
+            let same_ext = want.is_some() && p.extension().map(|e| e.to_string_lossy().to_lowercase()) == want;
+            (same_ext, meta.modified().ok())
+        })
+        .map(|(_, _, p)| p)
 }
 
 async fn run_plan(
-    plan: &[Plan], site: Site, output: &Output, rep: &mut Reporter, cancel: &Cancel,
+    plan: &[Plan], site: Site, output: &Output, started: SystemTime, rep: &mut Reporter, cancel: &Cancel,
 ) -> Result<String, StepErr> {
     for step in plan {
         if cancel.is_set() {
@@ -364,7 +397,8 @@ async fn run_plan(
     match output {
         Output::Dir(d) => Ok(d.to_string_lossy().into_owned()),
         Output::File(dest) => {
-            let found = if dest.exists() { Some(dest.clone()) } else { newest_with_stem(dest) };
+            // gallery-dl may stamp a file with the post's date, so an existing dest is the last resort.
+            let found = newest_with_stem(dest, started).or_else(|| dest.exists().then(|| dest.clone()));
             found
                 .map(|p| p.to_string_lossy().into_owned())
                 .ok_or_else(|| StepErr::Failed(unknown(format!("output file missing: {}", dest.display()))))
@@ -372,16 +406,14 @@ async fn run_plan(
     }
 }
 
-/// Deletes `<stem>.*` files (`.part`, `.ytdl`, pre-conversion media) this job left next to `dest`.
+/// Deletes the partial `<stem>.*` files (see `is_partial`) written next to `dest` since `started`.
+/// Complete files are left alone: the MP4 and MP3 rows share a stem, so one may be a sibling job's
+/// finished output. (With `-P temp:` yt-dlp keeps its partials in the job dir anyway.)
 fn remove_stem_leftovers(dest: &Path, started: SystemTime) {
     let Some(stem) = dest.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else { return };
-    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.filter_map(|e| e.ok()) {
-        let name = e.file_name().to_string_lossy().to_lowercase();
-        let fresh = e.metadata().ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).is_some_and(|m| m >= started);
-        if name.starts_with(&format!("{stem}.")) && fresh {
-            let _ = std::fs::remove_file(e.path());
+    for (name, meta, path) in stem_files(dest) {
+        if is_partial(&stem, &name) && written_since(&meta, started) {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -542,7 +574,7 @@ impl JobManager {
         let dest_existed = matches!(&output, Output::File(d) if d.exists());
         rep.emit(JobState::Started);
 
-        let result = run_plan(&plan, site, &output, &mut rep, &cancel).await;
+        let result = run_plan(&plan, site, &output, started, &mut rep, &cancel).await;
         let final_state = match result {
             Ok(path) => JobState::Done { path },
             Err(StepErr::Cancelled) => JobState::Cancelled,
@@ -771,6 +803,65 @@ mod tests {
             .unwrap();
         wait_until("final event", || sink.is_final()).await;
         assert_eq!(sink.events().last().unwrap().state, JobState::Done { path: actual.to_string_lossy().into_owned() });
+    }
+
+    /// A file left from before this job is never reported as its output.
+    #[tokio::test]
+    async fn done_path_ignores_files_older_than_the_job() {
+        let env = Env::new();
+        env.tool("ffmpeg", "exit /b 0");
+        // An old file at dest itself (e.g. from an earlier download) that this run did not rewrite.
+        let stale = env.out.path().join("clip.mp3");
+        std::fs::write(&stale, "old").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        let actual = env.out.path().join("clip.opus");
+        env.tool("yt-dlp", &format!("echo x> \"{}\"\r\necho x> \"{}.part\"", actual.display(), env.out.path().join("clip.zzz").display()));
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        m.start(sink.clone(), &seeded_cache(), URL.into(), "0/audio".into(), env.out.path().join("clip.mp3"))
+            .await
+            .unwrap();
+        wait_until("final event", || sink.is_final()).await;
+        assert_eq!(sink.events().last().unwrap().state, JobState::Done { path: actual.to_string_lossy().into_owned() });
+    }
+
+    /// The MP4 and MP3 rows share a stem: cancelling the MP3 must not delete the MP4 a sibling job just finished.
+    #[tokio::test]
+    async fn cancel_keeps_a_sibling_jobs_finished_file() {
+        let env = Env::new();
+        let sibling = env.out.path().join("clip.mp4");
+        let part = env.out.path().join("clip.f140.m4a.part");
+        let frag = env.out.path().join("clip.mp3.ytdl");
+        env.tool("ffmpeg", "exit /b 0");
+        env.tool(
+            "yt-dlp",
+            &format!(
+                "echo LUMI^|1^|100^|NA\r\necho mp4> \"{}\"\r\necho x> \"{}\"\r\necho x> \"{}\"\r\nping -n 30 127.0.0.1 >nul",
+                sibling.display(),
+                part.display(),
+                frag.display()
+            ),
+        );
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        let id = m.start(sink.clone(), &seeded_cache(), URL.into(), "0/audio".into(), env.out.path().join("clip.mp3")).await.unwrap();
+        wait_until("files written", || frag.exists()).await;
+        m.cancel(&id).unwrap();
+        wait_until("final event", || sink.is_final()).await;
+        assert_eq!(sink.events().last().unwrap().state, JobState::Cancelled);
+        assert!(sibling.exists(), "a complete sibling file is never swept");
+        assert!(!part.exists() && !frag.exists(), "partials are swept");
+    }
+
+    #[test]
+    fn partial_names() {
+        for p in ["clip.webm.part", "clip.mp3.ytdl", "clip.temp.mp4", "clip.f137.mp4", "clip.f251-drc.webm.part", "clip.mp4.part-Frag3"] {
+            assert!(is_partial("clip", &p.to_lowercase()), "{p}");
+        }
+        for p in ["clip.mp4", "clip.mp3", "clip.m4a", "clip.webm", "clipper.part"] {
+            assert!(!is_partial("clip", p), "{p}");
+        }
     }
 
     async fn start_slow(env: &Env, m: &JobManager, sink: &Arc<VecSink>, dest: &Path) -> String {
