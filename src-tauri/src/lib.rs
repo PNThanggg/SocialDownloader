@@ -1,4 +1,5 @@
 mod accounts;
+mod download;
 mod errors;
 mod model;
 mod resolve;
@@ -25,6 +26,7 @@ pub fn run() {
             tools::tool_download_size,
             tools::install_tool,
             tools::update_tools,
+            download::filename::default_filename,
             resolve::resolve,
             thumb::fetch_thumbnail
         ])
