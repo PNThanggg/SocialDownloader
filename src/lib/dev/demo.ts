@@ -53,6 +53,8 @@ function install(plan: Partial<Record<Tool, { size: number | null; secs: number;
 
 /** Answers these commands in place of the backend; everything else still reaches Rust. */
 function backend(handlers: Record<string, (args?: Record<string, unknown>) => unknown>) {
+  // The startup check asks only which tools exist; answer it like tools_status.
+  if (handlers.tools_status && !handlers.tools_installed) handlers.tools_installed = handlers.tools_status
   const fake: DemoBackend = (cmd, args) =>
     cmd in handlers ? Promise.resolve().then(() => handlers[cmd](args)) : undefined
   ;(globalThis as { __lumiDemoBackend?: DemoBackend }).__lumiDemoBackend = fake

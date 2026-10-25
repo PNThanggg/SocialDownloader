@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -23,8 +24,11 @@ use crate::errors::{classify, ErrorCode, LumiError};
 use crate::model::{Engine, MediaInfo, OptionId, Site};
 use crate::resolve::{resolve_url, ResolveCache};
 use crate::tools::paths::{tmp_dir, tool_path};
-use crate::tools::runner::{spawn_tool, ytdlp_common_args, CREATE_NO_WINDOW};
+use crate::tools::runner::{gallerydl_common_args, spawn_tool, ytdlp_common_args, CREATE_NO_WINDOW};
 use crate::tools::Tool;
+
+/// A TikTok sound's `play_url` is signed and expires; older entries are resolved again first.
+const SOUND_MAX_AGE: Duration = Duration::from_secs(30 * 60);
 
 const POSTPROCESS_TAGS: [&str; 5] = ["[ExtractAudio]", "[Merger]", "[Metadata]", "[EmbedThumbnail]", "[FixupM3u8]"];
 
@@ -105,6 +109,9 @@ enum Output {
     Dir(PathBuf),
 }
 
+/// Fetches a fresh URL for a required Http step that failed (the TikTok sound's expired `play_url`).
+type Refresh = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send>;
+
 struct JobSpec {
     job_id: String,
     url: String,
@@ -114,6 +121,7 @@ struct JobSpec {
     plan: Vec<Plan>,
     tmp: PathBuf,
     cookies: Option<TempCookieFile>,
+    refresh: Option<Refresh>,
 }
 
 enum StepErr {
@@ -129,6 +137,20 @@ impl From<LumiError> for StepErr {
 
 fn unknown(detail: impl Into<String>) -> LumiError {
     LumiError::new(ErrorCode::Unknown, detail)
+}
+
+/// `detail` is the running job's id, so the UI can follow it instead.
+fn already_running(job_id: &str) -> LumiError {
+    LumiError::new(ErrorCode::AlreadyRunning, job_id)
+}
+
+/// `download`/`download_all` only write to a full path the user picked.
+fn require_absolute(path: &Path) -> Result<(), LumiError> {
+    if path.is_absolute() {
+        Ok(())
+    } else {
+        Err(unknown(format!("destination must be an absolute path: {}", path.display())))
+    }
 }
 
 async fn or_cancel<T>(cancel: &Cancel, fut: impl Future<Output = T>) -> Result<T, StepErr> {
@@ -362,6 +384,7 @@ fn newest_with_stem(dest: &Path, started: SystemTime) -> Option<PathBuf> {
 
 async fn run_plan(
     plan: &[Plan], site: Site, output: &Output, started: SystemTime, rep: &mut Reporter, cancel: &Cancel,
+    mut refresh: Option<Refresh>,
 ) -> Result<String, StepErr> {
     for step in plan {
         if cancel.is_set() {
@@ -378,6 +401,14 @@ async fn run_plan(
                     Err(StepErr::Failed(_)) if *optional => {
                         let _ = std::fs::remove_file(to);
                     }
+                    // A stale signed URL: resolve again once and retry with the fresh one.
+                    Err(StepErr::Failed(e)) => match refresh.take() {
+                        Some(f) => match or_cancel(cancel, f()).await? {
+                            Some(fresh) => http_step(&fresh, referer, to, rep, cancel).await?,
+                            None => return Err(StepErr::Failed(e)),
+                        },
+                        None => return Err(StepErr::Failed(e)),
+                    },
                     other => other?,
                 }
             }
@@ -418,12 +449,18 @@ fn remove_stem_leftovers(dest: &Path, started: SystemTime) {
     }
 }
 
+/// Resolves `url` again (updating the cache) for the sound's fresh `play_url`.
+fn sound_refresh(url: String, cache: ResolveCache) -> Refresh {
+    Box::new(move || Box::pin(async move { resolve_url(&url, &cache).await.ok()?.sound.map(|s| s.play_url) }))
+}
+
 /// "Download all" into `dest_dir`. Unfinished pieces go to the job's `tmp` (removed on cancel or
 /// failure), so only complete files ever land in the user's folder.
 fn download_all_plan(info: &MediaInfo, dest_dir: &Path, tmp: &Path, cookies: Option<&Path>) -> Plan {
     match info.engine {
         Engine::GalleryDl => {
-            let mut a: Vec<OsString> = vec!["-D".into(), dest_dir.into()];
+            let mut a = gallerydl_common_args();
+            a.extend(["-D".into(), dest_dir.into()]);
             // A root-level option: gallery-dl's downloaders look it up before their own sections.
             let mut part_dir = OsString::from("part-directory=");
             part_dir.push(tmp);
@@ -431,7 +468,7 @@ fn download_all_plan(info: &MediaInfo, dest_dir: &Path, tmp: &Path, cookies: Opt
             if let Some(c) = cookies {
                 a.extend(["--cookies".into(), c.into()]);
             }
-            a.push((&info.source_url).into());
+            a.extend(["--".into(), (&info.source_url).into()]);
             Plan::GalleryDl(a)
         }
         Engine::YtDlp => {
@@ -458,7 +495,7 @@ fn download_all_plan(info: &MediaInfo, dest_dir: &Path, tmp: &Path, cookies: Opt
             if let Some(c) = cookies {
                 a.extend(["--cookies".into(), c.into()]);
             }
-            a.push((&info.source_url).into());
+            a.extend(["--".into(), (&info.source_url).into()]);
             Plan::YtDlp(a)
         }
     }
@@ -478,7 +515,7 @@ impl JobManager {
     fn ensure_not_running(&self, key: &(String, String)) -> Result<(), LumiError> {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         match jobs.iter().find(|(_, h)| &h.key == key) {
-            Some((existing, _)) => Err(unknown(existing.clone())),
+            Some((existing, _)) => Err(already_running(existing)),
             None => Ok(()),
         }
     }
@@ -486,7 +523,7 @@ impl JobManager {
     fn register(&self, job_id: &str, key: (String, String), cancel: Arc<Cancel>) -> Result<(), LumiError> {
         let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((existing, _)) = jobs.iter().find(|(_, h)| h.key == key) {
-            return Err(unknown(existing.clone()));
+            return Err(already_running(existing));
         }
         jobs.insert(job_id.to_owned(), JobHandle { key, cancel });
         Ok(())
@@ -519,8 +556,10 @@ impl JobManager {
     pub async fn start(
         &self, sink: Arc<dyn JobSink>, cache: &ResolveCache, url: String, option_id: String, dest: PathBuf,
     ) -> Result<String, LumiError> {
-        let info = Self::media_info(&url, cache).await?;
+        require_absolute(&dest)?;
         let opt = OptionId::parse(&option_id).ok_or_else(|| unknown(format!("bad option id: {option_id}")))?;
+        let stale = opt == OptionId::Sound && cache.age(&url).is_some_and(|a| a > SOUND_MAX_AGE);
+        let info = if stale { resolve_url(&url, cache).await? } else { Self::media_info(&url, cache).await? };
         if needs_ffmpeg(&info, &opt) && !tool_path(Tool::Ffmpeg).exists() {
             return Err(LumiError::new(ErrorCode::ToolMissing { tool: Tool::Ffmpeg }, "ffmpeg is not installed"));
         }
@@ -531,7 +570,8 @@ impl JobManager {
         let cookies = cookie_file_for(info.site)?;
         let plan = build_plan(&info, &opt, &dest, &tmp, cookies.as_ref().map(|c| c.0.as_path()))
             .map_err(|code| LumiError::new(code, "cannot build a download plan for this option"))?;
-        let spec = JobSpec { job_id, url, option_id, site: info.site, output: Output::File(dest), plan, tmp, cookies };
+        let refresh = (opt == OptionId::Sound).then(|| sound_refresh(url.clone(), cache.clone()));
+        let spec = JobSpec { job_id, url, option_id, site: info.site, output: Output::File(dest), plan, tmp, cookies, refresh };
         self.launch(sink, spec)
     }
 
@@ -539,6 +579,7 @@ impl JobManager {
     pub async fn start_all(
         &self, sink: Arc<dyn JobSink>, cache: &ResolveCache, url: String, dest_dir: PathBuf,
     ) -> Result<String, LumiError> {
+        require_absolute(&dest_dir)?;
         let info = Self::media_info(&url, cache).await?;
         if info.engine == Engine::YtDlp && !tool_path(Tool::Ffmpeg).exists() {
             // `bv*+ba` merges, which needs ffmpeg.
@@ -559,6 +600,7 @@ impl JobManager {
             plan: vec![plan],
             tmp,
             cookies,
+            refresh: None,
         };
         self.launch(sink, spec)
     }
@@ -577,7 +619,7 @@ impl JobManager {
     }
 
     async fn run_job(&self, sink: Arc<dyn JobSink>, spec: JobSpec, cancel: Arc<Cancel>) {
-        let JobSpec { job_id, url, option_id, site, output, plan, tmp, cookies } = spec;
+        let JobSpec { job_id, url, option_id, site, output, plan, tmp, cookies, refresh } = spec;
         let mut rep = Reporter {
             sink,
             job_id: job_id.clone(),
@@ -591,7 +633,7 @@ impl JobManager {
         let dest_existed = matches!(&output, Output::File(d) if d.exists());
         rep.emit(JobState::Started);
 
-        let result = run_plan(&plan, site, &output, started, &mut rep, &cancel).await;
+        let result = run_plan(&plan, site, &output, started, &mut rep, &cancel, refresh).await;
         let final_state = match result {
             Ok(path) => JobState::Done { path },
             Err(StepErr::Cancelled) => JobState::Cancelled,
@@ -894,6 +936,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relative_destinations_are_rejected() {
+        let _env = Env::new();
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        let err = m.start(sink.clone(), &seeded_cache(), URL.into(), "0/video:0".into(), PathBuf::from(r"..\x.mp4")).await.unwrap_err();
+        assert_eq!(err.error, ErrorCode::Unknown);
+        assert!(err.detail.contains("absolute"), "{}", err.detail);
+        let err = m.start_all(sink.clone(), &seeded_cache(), URL.into(), PathBuf::from("out")).await.unwrap_err();
+        assert!(err.detail.contains("absolute"), "{}", err.detail);
+        assert_eq!(m.active(), 0);
+        assert!(sink.events().is_empty());
+    }
+
+    /// Serves `body` to every request on a local port; returns its URL and a request counter.
+    async fn serve(body: &'static [u8]) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/s.mp3", listener.local_addr().unwrap());
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                h.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(head.as_bytes()).await;
+                let _ = s.write_all(body).await;
+                let _ = s.shutdown().await;
+            }
+        });
+        (url, hits)
+    }
+
+    fn test_reporter(sink: Arc<VecSink>) -> Reporter {
+        Reporter { sink, job_id: "j".into(), url: URL.into(), option_id: "sound".into(), last: None, sent_unknown: false, post_sent: false }
+    }
+
+    /// The sound's signed play_url expired: the step is retried once with a freshly resolved URL.
+    #[tokio::test]
+    async fn failed_sound_download_refreshes_the_url_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (fresh, hits) = serve(b"ID3sound").await;
+        let to = dir.path().join("sound.src");
+        let plan = [Plan::Http { url: "http://127.0.0.1:1/expired".into(), referer: "r".into(), to: to.clone(), optional: false }];
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = calls.clone();
+        let refresh: Refresh = Box::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Some(fresh) })
+        });
+        let out = Output::Dir(dir.path().to_path_buf());
+        let mut rep = test_reporter(Arc::new(VecSink::default()));
+        let r = run_plan(&plan, Site::Tiktok, &out, SystemTime::now(), &mut rep, &Cancel::new(), Some(refresh)).await;
+        assert!(r.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&to).unwrap(), b"ID3sound");
+
+        // Without a fresh URL the original error stands.
+        let none: Refresh = Box::new(|| Box::pin(async { None }));
+        let r = run_plan(&plan, Site::Tiktok, &out, SystemTime::now(), &mut rep, &Cancel::new(), Some(none)).await;
+        assert!(matches!(r, Err(StepErr::Failed(LumiError { error: ErrorCode::Network, .. }))));
+    }
+
+    /// A sound row left open for more than 30 minutes is resolved again before downloading.
+    #[tokio::test]
+    async fn stale_sound_entry_is_resolved_again() {
+        let env = Env::new();
+        let (fresh, hits) = serve(b"ID3sound").await;
+        let json = format!(
+            r#"{{"id":"1","title":"T","uploader":"u","webpage_url":"{URL}","formats":[{{"format_id":"audio","url":"{fresh}","ext":"mp3","vcodec":"none","acodec":"mp3"}}]}}"#
+        );
+        std::fs::write(env.bin.path().join("yt-dlp.json"), json).unwrap();
+        env.tool("yt-dlp", "type \"%~dp0yt-dlp.json\"");
+        env.tool("ffmpeg", "exit /b 0");
+        let cache = seeded_cache();
+        let old = cache.get(URL).unwrap();
+        cache.insert_aged(URL, old, SOUND_MAX_AGE + Duration::from_secs(60));
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        m.start(sink.clone(), &cache, URL.into(), "sound".into(), env.out.path().join("s.mp3")).await.unwrap();
+        wait_until("final event", || sink.is_final()).await;
+        assert!(cache.age(URL).unwrap() < SOUND_MAX_AGE, "entry refreshed");
+        assert_eq!(cache.get(URL).unwrap().sound.unwrap().play_url, fresh);
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "downloaded from the fresh URL, not the stale one");
+    }
+
+    #[tokio::test]
     async fn duplicate_job_rejected() {
         let env = Env::new();
         let dest = env.out.path().join("clip.mp3");
@@ -904,6 +1034,7 @@ mod tests {
             .start(sink.clone(), &seeded_cache(), URL.into(), "0/audio".into(), dest.clone())
             .await
             .unwrap_err();
+        assert_eq!(err.error, ErrorCode::AlreadyRunning);
         assert_eq!(err.detail, id);
         assert_eq!(m.active(), 1);
         m.cancel(&id).unwrap();
@@ -1010,14 +1141,16 @@ mod tests {
         assert!(has_pair(&a, "-P", r"home:D:\50% off"), "{a:?}");
         assert!(has_pair(&a, "-P", r"temp:C:\tmp\job"), "{a:?}");
         assert!(has_pair(&a, "-o", "%(title).80B [%(id)s].%(ext)s"), "relative, or yt-dlp ignores -P temp: {a:?}");
-        assert_eq!(a.last().unwrap(), URL);
+        assert!(a.contains(&"--ignore-config".to_string()), "{a:?}");
+        assert_eq!(a[a.len() - 2..], ["--", URL]);
 
         info.engine = Engine::GalleryDl;
         let a = plan_strings(&download_all_plan(&info, &dir, &tmp, Some(Path::new(r"C:\c.txt"))));
         assert!(has_pair(&a, "-D", r"D:\50% off"), "{a:?}");
         assert!(has_pair(&a, "-o", r"part-directory=C:\tmp\job"), "{a:?}");
         assert!(has_pair(&a, "--cookies", r"C:\c.txt"), "{a:?}");
-        assert_eq!(a.last().unwrap(), URL);
+        assert_eq!(a[0], "--config-ignore");
+        assert_eq!(a[a.len() - 2..], ["--", URL]);
     }
 
     #[test]

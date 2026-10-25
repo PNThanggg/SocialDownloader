@@ -17,7 +17,7 @@ use crate::tools::paths::tool_path;
 use crate::tools::runner::run_tool;
 
 pub use cache::ResolveCache;
-use gallerydl::{gallerydl_resolve_args, parse_gallerydl_json, primary_engine};
+use gallerydl::{gallerydl_error_text, gallerydl_resolve_args, parse_gallerydl_json, primary_engine};
 use tiktok_sound::{fetch_tiktok_sound, ytdlp_sound_fallback};
 use ytdlp::{parse_ytdlp_json, ytdlp_resolve_args};
 
@@ -58,9 +58,17 @@ async fn run_engine(engine: Engine, site: Site, url: &str) -> Result<(MediaInfo,
     match parsed {
         Ok(info) => Ok((info, raw)),
         Err(code) => {
-            // A clean exit with nothing usable: gallery-dl reports why on stderr.
-            let code = if code == ErrorCode::Unknown { classify(site, &out.stderr) } else { code };
-            Err(LumiError::new(code, out.stderr))
+            // A clean exit with nothing usable: gallery-dl reports why in its `-j` output
+            // (`[-1, {error, message}]`) and sometimes on stderr; both are the raw log.
+            let reported = (engine == Engine::GalleryDl).then(|| gallerydl_error_text(&out.stdout)).flatten();
+            let detail = [reported.as_deref(), Some(out.stderr.trim())]
+                .into_iter()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let code = if code == ErrorCode::Unknown { classify(site, &detail) } else { code };
+            Err(LumiError::new(code, detail))
         }
     }
 }
@@ -301,6 +309,20 @@ mod tests {
         let err = resolve_url("https://www.instagram.com/p/C8x/", &ResolveCache::default()).await.unwrap_err();
         unsafe { std::env::remove_var("LUMI_BIN_DIR") };
         assert_eq!(err.error, ErrorCode::LoginRequired { site: Site::Instagram });
+        assert_eq!(err.detail, "AbortExtraction: HTTP redirect to login page");
+    }
+
+    /// gallery-dl exits 0 with its error inside the JSON: that text is what "Show details" shows.
+    #[tokio::test]
+    async fn gallerydl_error_message_is_the_detail() {
+        let (_g, dir) = with_bin_dir();
+        let boom = r#"[[-1,{"error":"HttpError","message":"'500 Internal Server Error' for 'https://www.instagram.com/p/C8x/'"}]]"#;
+        fake_tool(dir.path(), "gallery-dl", boom, "", 0);
+        fake_tool(dir.path(), "yt-dlp", "", "ERROR: Unsupported URL: x", 1);
+        let err = resolve_url("https://www.instagram.com/p/C8x/", &ResolveCache::default()).await.unwrap_err();
+        unsafe { std::env::remove_var("LUMI_BIN_DIR") };
+        assert_eq!(err.error, ErrorCode::Unknown);
+        assert!(err.detail.starts_with("HttpError: '500 Internal Server Error'"), "{}", err.detail);
     }
 
     #[tokio::test]

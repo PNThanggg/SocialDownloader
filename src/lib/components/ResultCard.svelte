@@ -121,8 +121,10 @@
     try {
       follower.follow(await api.downloadAll(info.sourceUrl, allDir))
     } catch (e) {
-      follower.stop()
       const error = api.normalize(e)
+      // "Download all" of this link is already running: follow that job.
+      if (error.error.code === 'already_running') return follower.follow(error.detail)
+      follower.stop()
       if (needsFfmpeg(error)) await offerFfmpeg()
       else all = { s: 'error', error }
     }
@@ -249,7 +251,7 @@
         </div>
       </div>
       {#if all.s === 'error'}
-        <ErrorBanner error={all.error} compact onaction={onAllError} />
+        <ErrorBanner error={all.error} compact during="download" onaction={onAllError} />
       {/if}
       <Notice {notice} />
       <ImageGrid items={info.items} site={info.site} selected={shown} onselect={(i) => (selected = i)} />

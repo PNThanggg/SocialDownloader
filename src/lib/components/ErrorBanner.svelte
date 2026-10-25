@@ -6,16 +6,19 @@
     error,
     connected = false,
     compact = false,
+    during = 'resolve',
     onaction,
   }: {
     error: LumiError
     connected?: boolean
     compact?: boolean
+    /** What failed: reading the link (default) or a download. */
+    during?: 'resolve' | 'download'
     /** Called for every action except `details`, which only expands the raw log. */
     onaction?: (action: ErrorAction) => unknown
   } = $props()
 
-  const mapped = $derived(errorMessage(error.error, connected))
+  const mapped = $derived(errorMessage(error.error, connected, during))
   const params = $derived.by((): Record<string, string> => {
     const e = error.error
     if (e.code === 'login_required') return { site: e.site }

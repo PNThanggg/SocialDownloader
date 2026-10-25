@@ -5,8 +5,10 @@ use super::Tool;
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// `LUMI_BIN_DIR` override, else `%LOCALAPPDATA%\Lumi\bin`. Not created here.
+/// `%LOCALAPPDATA%\Lumi\bin`. Not created here. Tests redirect it with `LUMI_BIN_DIR`; a release
+/// build ignores that variable, so the environment can never point Lumi at other executables.
 pub fn bin_dir() -> PathBuf {
+    #[cfg(test)]
     if let Some(dir) = std::env::var_os("LUMI_BIN_DIR") {
         return PathBuf::from(dir);
     }

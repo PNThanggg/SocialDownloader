@@ -39,6 +39,11 @@ export const locale: Readable<Locale> = derived(language, ($l) =>
   $l === 'auto' ? detectLocale(typeof navigator === 'undefined' ? 'en' : navigator.language) : $l,
 )
 
+/** Keeps `<html lang>` on the active locale (screen readers, spell-check); returns the unsubscribe. */
+export function syncDocumentLang(doc: Document): () => void {
+  return locale.subscribe((l) => (doc.documentElement.lang = l))
+}
+
 export async function initLanguage(): Promise<void> {
   language.set(await readLanguage())
 }
@@ -64,17 +69,26 @@ export const t: Readable<Translate> = derived(locale, ($locale): Translate => (k
 
 export type ErrorAction = 'connect' | 'reconnect' | 'update' | 'retry' | 'details' | 'reinstall'
 
-export function errorMessage(e: ErrorCode, connected: boolean): { key: MessageKey; action?: ErrorAction } {
+/** Sites with an in-app login (Settings → Accounts); only they get a Connect button. */
+const LOGIN_SITES: readonly Site[] = ['instagram', 'facebook']
+
+/** `during`: what failed, so a vague error names it (reading a link vs. a download). */
+export function errorMessage(
+  e: ErrorCode,
+  connected: boolean,
+  during: 'resolve' | 'download' = 'resolve',
+): { key: MessageKey; action?: ErrorAction } {
   const key = `err.${e.code}` as const
   switch (e.code) {
     case 'login_required':
+      if (!LOGIN_SITES.includes(e.site)) return { key }
       return { key, action: connected ? 'reconnect' : 'connect' }
     case 'extractor_broken':
       return { key, action: 'update' }
     case 'network':
       return { key, action: 'retry' }
     case 'unknown':
-      return { key, action: 'details' }
+      return { key: during === 'download' ? 'err.unknown_download' : key, action: 'details' }
     case 'tool_missing':
       return { key, action: 'reinstall' }
     default:

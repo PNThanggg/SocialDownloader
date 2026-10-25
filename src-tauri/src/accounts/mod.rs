@@ -126,8 +126,11 @@ fn forget(a: &Account) -> Result<(), LumiError> {
     }
 }
 
+/// Connected = a jar that this Windows user can decrypt. A corrupt jar (or one sealed by another
+/// user/machine) counts as signed out, so the UI offers to connect again.
 fn status(a: &Account) -> AccountStatus {
-    AccountStatus { site: a.site, connected: store_path(a).exists() }
+    let connected = std::fs::read(store_path(a)).is_ok_and(|sealed| unprotect(&sealed).is_ok());
+    AccountStatus { site: a.site, connected }
 }
 
 /// Encrypts `netscape` with DPAPI into `accounts\<site>.cookies.bin` (write-then-rename).
@@ -153,7 +156,9 @@ pub fn cookie_file_for(site: Site) -> Result<Option<TempCookieFile>, LumiError> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(LumiError::new(ErrorCode::Unknown, format!("read cookie jar: {e}"))),
     };
-    let plain = unprotect(&sealed)?;
+    let plain = unprotect(&sealed).map_err(|e| {
+        LumiError::new(ErrorCode::LoginRequired { site }, format!("saved sign-in is unreadable, connect again ({})", e.detail))
+    })?;
     let tmp = crate::tools::paths::tmp_dir();
     std::fs::create_dir_all(&tmp)
         .map_err(|e| LumiError::new(ErrorCode::Unknown, format!("create tmp dir: {e}")))?;
@@ -334,7 +339,9 @@ mod tests {
         let d = Dirs::new();
         std::fs::write(d.accounts.path().join("facebook.cookies.bin"), b"garbage").unwrap();
         let err = cookie_file_for(Site::Facebook).err().expect("corrupt jar must fail");
+        assert_eq!(err.error, ErrorCode::LoginRequired { site: Site::Facebook }, "the UI offers to connect again");
         assert!(!err.detail.contains("garbage"));
+        assert!(accounts_status().contains(&AccountStatus { site: Site::Facebook, connected: false }));
         let tmp = d.tmp.path().join("tmp");
         assert!(!tmp.exists() || std::fs::read_dir(&tmp).unwrap().count() == 0);
     }

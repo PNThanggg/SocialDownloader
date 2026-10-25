@@ -19,6 +19,8 @@ pub enum ErrorCode {
     YoutubeBotCheck,
     PlaylistNotSupported,
     ToolMissing { tool: Tool },
+    /// A job for the same link and option is running; `detail` is its job id.
+    AlreadyRunning,
     Unknown,
 }
 
@@ -62,7 +64,12 @@ pub fn classify(site: Site, stderr: &str) -> ErrorCode {
     if BOT_CHECK.is_match(stderr) {
         ErrorCode::YoutubeBotCheck
     } else if LOGIN.is_match(stderr) {
-        ErrorCode::LoginRequired { site }
+        // Only these sites have an in-app login; elsewhere "log in" means the post isn't public.
+        if matches!(site, Site::Instagram | Site::Facebook) {
+            ErrorCode::LoginRequired { site }
+        } else {
+            ErrorCode::PrivateOrRemoved
+        }
     } else if PRIVATE.is_match(stderr) {
         ErrorCode::PrivateOrRemoved
     } else if RATE_LIMIT.is_match(stderr) {
@@ -103,7 +110,12 @@ mod tests {
             (Site::Instagram, "[instagram][error] HttpError: '429 Too Many Requests'", RateLimited),
             (Site::Youtube, "ERROR: [youtube] x: Requested format is not available", Unknown),
             (Site::Other, "something completely different", Unknown),
-            (Site::Tiktok, "please report this issue ... login required", LoginRequired { site: Site::Tiktok }),
+            (Site::Instagram, "please report this issue ... login required", LoginRequired { site: Site::Instagram }),
+            // No in-app login for these sites: "Connect TikTok" could never work.
+            (Site::Tiktok, "please report this issue ... login required", PrivateOrRemoved),
+            (Site::Tiktok, "ERROR: [TikTok] 1: This post may not be comfortable for some audiences. Log in for access", PrivateOrRemoved),
+            (Site::Youtube, "ERROR: [youtube] x: This video is only available for registered users", PrivateOrRemoved),
+            (Site::Other, "ERROR: login required", PrivateOrRemoved),
         ];
         for (site, text, expected) in cases {
             assert_eq!(classify(site, text), expected, "input: {text}");
@@ -125,5 +137,6 @@ mod tests {
         assert_eq!(v, serde_json::json!({"code": "login_required", "site": "instagram"}));
         let v = serde_json::to_value(ToolMissing { tool: Tool::YtDlp }).unwrap();
         assert_eq!(v, serde_json::json!({"code": "tool_missing", "tool": "yt_dlp"}));
+        assert_eq!(serde_json::to_value(AlreadyRunning).unwrap(), serde_json::json!({"code": "already_running"}));
     }
 }

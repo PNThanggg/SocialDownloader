@@ -267,6 +267,27 @@ describe('OptionRow', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('follows the job already running for this item instead of failing', async () => {
+    vi.mocked(api.download).mockRejectedValueOnce({ error: { code: 'already_running' }, detail: 'job-1' })
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(1))
+    emit({ state: 'progress', fraction: 0.5 })
+    expect((await screen.findByRole('progressbar')).getAttribute('aria-valuenow')).toBe('50')
+    expect(screen.queryByRole('alert')).toBeNull()
+    emit({ state: 'done', path: 'D:\\x\\a.mp3' })
+    await screen.findByRole('button', { name: /Open folder/ })
+  })
+
+  it('a failed download says "while downloading", not "reading this link"', async () => {
+    render(OptionRow, { info: single, opt: opt({ id: '0/audio', kind: 'audio', label: 'MP3' }) })
+    await fireEvent.click(screen.getByRole('button', { name: /Download/ }))
+    await waitFor(() => expect(api.download).toHaveBeenCalledTimes(1))
+    emit({ state: 'failed', error: { error: { code: 'unknown' }, detail: 'ffmpeg: Conversion failed' } })
+    await screen.findByText('Something went wrong while downloading.')
+    expect(screen.queryByText('Something went wrong reading this link.')).toBeNull()
+  })
+
   it('a copy failure shows a short notice and never offers a download Retry', async () => {
     vi.mocked(writeText).mockRejectedValueOnce(new Error('denied'))
     render(OptionRow, { info: single, opt: opt({ id: 'sound', kind: 'original_sound', label: 'T', directUrl: 'https://cdn/s.mp3' }) })

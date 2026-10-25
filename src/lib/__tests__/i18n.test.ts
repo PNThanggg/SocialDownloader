@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/plugin-store', () => ({
   })),
 }))
 
-import { detectLocale, initLanguage, language, locale, setLanguage, t } from '../i18n'
+import { detectLocale, initLanguage, language, locale, setLanguage, syncDocumentLang, t } from '../i18n'
 import { en } from '../i18n/en'
 import { vi as viMessages } from '../i18n/vi'
 
@@ -20,6 +20,19 @@ describe('messages', () => {
   })
   it('has no empty values', () => {
     for (const m of [en, viMessages]) for (const [k, v] of Object.entries(m)) expect(v, k).not.toBe('')
+  })
+})
+
+describe('syncDocumentLang', () => {
+  it('keeps <html lang> on the active locale', () => {
+    language.set('vi')
+    const off = syncDocumentLang(document)
+    expect(document.documentElement.lang).toBe('vi')
+    language.set('en')
+    expect(document.documentElement.lang).toBe('en')
+    off()
+    language.set('vi')
+    expect(document.documentElement.lang).toBe('en')
   })
 })
 

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::ErrorCode;
 use crate::model::{Engine, MediaInfo, MediaOption, OptionId, OptionNote};
-use crate::tools::runner::ytdlp_common_args;
+use crate::tools::runner::{gallerydl_common_args, ytdlp_common_args};
 
 const TIKTOK_REFERER: &str = "https://www.tiktok.com/";
 pub(crate) const PROGRESS_TEMPLATE: &str = "download:LUMI|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s";
@@ -111,7 +111,7 @@ fn ytdlp_plan(
             "--parse-metadata",
             "title:%(meta_title)s",
             "--parse-metadata",
-            "%(uploader,channel,creator)s:%(meta_artist)s",
+            "%(uploader,channel,creator|)s:%(meta_artist)s",
         ]));
     }
     let stem = dest.file_stem().ok_or(ErrorCode::Unknown)?;
@@ -137,19 +137,20 @@ fn ytdlp_plan(
         a.push("--cookies".into());
         a.push(c.into());
     }
-    a.push((&info.source_url).into());
+    a.extend(["--".into(), (&info.source_url).into()]);
     Ok(vec![Plan::YtDlp(a)])
 }
 
 fn gallery_args(info: &MediaInfo, item: u32, out_dir: &Path, cookies: Option<&Path>) -> Vec<OsString> {
-    let mut a = os(&["--range", &(item + 1).to_string(), "-D"]);
+    let mut a = gallerydl_common_args();
+    a.extend(os(&["--range", &(item + 1).to_string(), "-D"]));
     a.push(out_dir.into());
     a.extend(os(&["-o", "filename={num}.{extension}"]));
     if let Some(c) = cookies {
         a.push("--cookies".into());
         a.push(c.into());
     }
-    a.push((&info.source_url).into());
+    a.extend(["--".into(), (&info.source_url).into()]);
     a
 }
 
@@ -271,8 +272,9 @@ mod tests {
         assert_eq!(after(&a, "-P"), r"home:C:\out");
         assert!(a.windows(2).any(|w| w[0] == "-P" && w[1] == r"temp:C:\tmp\job"));
         assert_eq!(after(&a, "--parse-metadata"), "title:%(meta_title)s");
-        assert!(a.contains(&"%(uploader,channel,creator)s:%(meta_artist)s".to_string()));
-        assert_eq!(a.last().unwrap(), "https://x.test/v");
+        // `|` = empty when all are missing (not "NA"), so the artist override is skipped.
+        assert!(a.contains(&"%(uploader,channel,creator|)s:%(meta_artist)s".to_string()));
+        assert_eq!(a[a.len() - 2..], ["--", "https://x.test/v"]);
     }
 
     #[test]
@@ -374,6 +376,8 @@ mod tests {
         assert_eq!(after(&a, "--range"), "2");
         assert_eq!(after(&a, "-D"), r"C:\tmp\job");
         assert_eq!(after(&a, "-o"), "filename={num}.{extension}");
+        assert_eq!(a[0], "--config-ignore");
+        assert_eq!(a[a.len() - 2..], ["--", "https://x.test/v"]);
         assert_eq!(p[1], Plan::MoveSingle { from_dir: tmp(), to: dest() });
 
         let p = build_plan(&i, &OptionId::Audio { item: 0 }, &dest(), &tmp(), None).unwrap();

@@ -33,6 +33,7 @@ vi.mock('../api', async (importOriginal) => {
     }),
     onJob: vi.fn(async () => () => {}),
     toolsStatus: vi.fn(),
+    toolsInstalled: vi.fn(),
     installTool: vi.fn(),
     toolDownloadSize: vi.fn(async () => 80 * MB),
     updateTools: vi.fn(),
@@ -229,7 +230,7 @@ describe('App deno prompt', () => {
   }
 
   async function startApp(denoInstalled: boolean) {
-    vi.mocked(api.toolsStatus).mockResolvedValue([
+    vi.mocked(api.toolsInstalled).mockResolvedValue([
       status('yt_dlp'),
       status('gallery_dl'),
       status('ffmpeg'),
@@ -306,7 +307,7 @@ describe('App deno prompt', () => {
   })
 
   it('shows the setup screen first when yt-dlp is missing', async () => {
-    vi.mocked(api.toolsStatus).mockResolvedValue([status('yt_dlp', false), status('gallery_dl'), status('ffmpeg'), status('deno')])
+    vi.mocked(api.toolsInstalled).mockResolvedValue([status('yt_dlp', false), status('gallery_dl'), status('ffmpeg'), status('deno')])
     vi.mocked(api.installTool).mockResolvedValue(status('yt_dlp'))
     render(App)
     await screen.findByText('Getting ready…')
@@ -319,7 +320,7 @@ describe('App update action', () => {
   const broken: LumiError = { error: { code: 'extractor_broken' }, detail: 'Unable to extract' }
 
   async function failOnce() {
-    vi.mocked(api.toolsStatus).mockResolvedValue([status('yt_dlp'), status('gallery_dl'), status('ffmpeg'), status('deno')])
+    vi.mocked(api.toolsInstalled).mockResolvedValue([status('yt_dlp'), status('gallery_dl'), status('ffmpeg'), status('deno')])
     vi.mocked(api.resolve).mockRejectedValue(broken)
     render(App)
     await waitFor(() => expect(get(toolStatuses)).not.toBeNull())
@@ -347,7 +348,7 @@ describe('App update action', () => {
 describe('App startup', () => {
   it('cannot read a link until the tool check is done, and setup leaves nothing stale', async () => {
     const check = deferred<ToolStatus[]>()
-    vi.mocked(api.toolsStatus).mockReturnValue(check.promise)
+    vi.mocked(api.toolsInstalled).mockReturnValue(check.promise)
     vi.mocked(api.installTool).mockResolvedValue(status('yt_dlp'))
     vi.mocked(api.resolve).mockRejectedValue({ error: { code: 'tool_missing', tool: 'yt_dlp' }, detail: '' })
     render(App)
@@ -367,6 +368,8 @@ describe('App startup', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     expect(api.resolve).not.toHaveBeenCalled()
     expect((screen.getByRole('button', { name: 'Get links' }) as HTMLButtonElement).disabled).toBe(false)
+    // Versions (four tool runs) are not part of startup.
+    expect(api.toolsStatus).not.toHaveBeenCalled()
   })
 })
 
@@ -514,6 +517,19 @@ describe('SettingsPanel', () => {
     render(SettingsPanel, { onclose: vi.fn() })
     await fireEvent.click(screen.getByRole('button', { name: 'Update' }))
     await screen.findByText('No network connection.')
+  })
+
+  it('shows a placeholder until the versions arrive', async () => {
+    const versions = deferred<ToolStatus[]>()
+    vi.mocked(api.toolsStatus).mockReturnValue(versions.promise)
+    // What the startup check left: installed, no versions yet.
+    toolStatuses.set([status('yt_dlp', true, null), status('gallery_dl', true, null), status('ffmpeg', false), status('deno', false)])
+    const { container } = render(SettingsPanel, { onclose: vi.fn() })
+    expect(container.querySelectorAll('.version.shimmer').length).toBe(2)
+    expect(screen.queryByText('—')).toBeNull()
+    versions.resolve([status('yt_dlp', true, '2026.10.21'), status('gallery_dl', true, '1.33.0'), status('ffmpeg', false), status('deno', false)])
+    await screen.findByText('2026.10.21')
+    expect(container.querySelectorAll('.version.shimmer').length).toBe(0)
   })
 
   it('closes on Escape and on the backdrop', async () => {

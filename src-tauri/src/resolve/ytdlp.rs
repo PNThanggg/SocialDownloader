@@ -38,7 +38,8 @@ pub fn ytdlp_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
         args.push("--cookies".into());
         args.push(p.as_os_str().to_owned());
     }
-    args.push(url.into());
+    // `--`: a URL is never read as an option.
+    args.extend(["--".into(), url.into()]);
     args
 }
 
@@ -252,10 +253,10 @@ mod tests {
         let args = ytdlp_resolve_args("https://x/y", Some(Path::new("c.txt")));
         let s: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(s.first().map(String::as_str), Some("-J"));
-        for want in ["--no-playlist", "--encoding", "utf-8", "--cookies", "c.txt"] {
+        for want in ["--ignore-config", "--no-playlist", "--encoding", "utf-8", "--cookies", "c.txt"] {
             assert!(s.iter().any(|a| a == want), "missing {want}");
         }
-        assert_eq!(s.last().map(String::as_str), Some("https://x/y"));
+        assert_eq!(s[s.len() - 2..], ["--", "https://x/y"]);
         let no = ytdlp_resolve_args("u", None);
         assert!(!no.iter().any(|a| a == "--cookies"));
     }

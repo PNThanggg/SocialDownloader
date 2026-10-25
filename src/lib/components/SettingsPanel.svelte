@@ -28,11 +28,15 @@
   let updateErrors = $state<{ tool: Tool | null; error: LumiError }[]>([])
   let updatedTimer: ReturnType<typeof setTimeout> | undefined
 
+  /** The startup check knows only which tools exist; versions arrive with `toolsStatus` below. */
+  let versionsLoaded = $state(false)
+
   /** `deno 2.1.4 (stable, …)` → `2.1.4`: the name is already in the row and the build notes are noise. */
   function versionOf(tool: Tool): string | null | undefined {
     const s = $toolStatuses?.find((x) => x.tool === tool)
     if (!s) return undefined
     if (!s.installed) return null
+    if (!s.version && !versionsLoaded) return undefined
     const v = (s.version ?? '')
       .replace(new RegExp(`^${toolName(tool)}\\s+`, 'i'), '')
       .replace(/\s*\(.*\)\s*$/, '')
@@ -43,8 +47,11 @@
     // A Connect still waiting on its login window keeps its state; the list is reloaded after it.
     void refreshAccounts()
     api.toolsStatus().then(
-      (list) => toolStatuses.set(list),
-      () => {},
+      (list) => {
+        toolStatuses.set(list)
+        versionsLoaded = true
+      },
+      () => (versionsLoaded = true),
     )
     return () => clearTimeout(updatedTimer)
   })

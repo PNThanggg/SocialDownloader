@@ -34,6 +34,7 @@ pub fn run() {
             accounts::disconnect_account,
             window_fx::window_effect,
             tools::tools_status,
+            tools::tools_installed,
             tools::tool_download_size,
             tools::install_tool,
             tools::update_tools,

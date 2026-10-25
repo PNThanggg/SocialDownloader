@@ -16,9 +16,15 @@ pub struct RunOutput {
     pub stderr: String,
 }
 
-/// Flags every yt-dlp invocation must carry; arg builders append them.
+/// Flags every yt-dlp invocation must carry; arg builders append them. `--ignore-config`: a user's
+/// yt-dlp config (e.g. a different `-o` or `--mtime`) must never change what Lumi gets.
 pub fn ytdlp_common_args() -> Vec<OsString> {
-    ["--encoding", "utf-8", "--no-playlist", "--no-warnings"].map(OsString::from).to_vec()
+    ["--ignore-config", "--encoding", "utf-8", "--no-playlist", "--no-warnings"].map(OsString::from).to_vec()
+}
+
+/// Flags every gallery-dl invocation must carry: never read a user's gallery-dl config.
+pub fn gallerydl_common_args() -> Vec<OsString> {
+    vec![OsString::from("--config-ignore")]
 }
 
 /// Flags spawn_tool prepends for yt-dlp, depending on which helpers are installed.
@@ -97,7 +103,8 @@ mod tests {
     fn common_args_exact() {
         let a: Vec<String> =
             ytdlp_common_args().into_iter().map(|s| s.to_string_lossy().into_owned()).collect();
-        assert_eq!(a, ["--encoding", "utf-8", "--no-playlist", "--no-warnings"]);
+        assert_eq!(a, ["--ignore-config", "--encoding", "utf-8", "--no-playlist", "--no-warnings"]);
+        assert_eq!(gallerydl_common_args(), [OsString::from("--config-ignore")]);
     }
 
     #[test]

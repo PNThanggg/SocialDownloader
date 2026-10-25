@@ -39,7 +39,8 @@
   /** Startup: the setup screen runs only when yt-dlp or gallery-dl is missing. */
   async function checkTools() {
     try {
-      const list = await api.toolsStatus()
+      // Only whether the files exist (instant); Settings loads the versions when opened.
+      const list = await api.toolsInstalled()
       toolStatuses.set(list)
       missing = CORE_TOOLS.filter((tool) => isInstalled(list, tool) === false)
     } catch {

@@ -46,7 +46,10 @@ export const download = (url: string, optionId: string, dest: string) =>
 export const downloadAll = (url: string, destDir: string) => call<string>('download_all', { url, destDir })
 export const cancelJob = (jobId: string) => call<void>('cancel_job', { jobId })
 
+/** Every tool with its version (runs each one: slow). */
 export const toolsStatus = () => call<ToolStatus[]>('tools_status')
+/** Which tools are on disk, versions left null (fast: the startup check). */
+export const toolsInstalled = () => call<ToolStatus[]>('tools_installed')
 export const installTool = (tool: Tool) => call<ToolStatus>('install_tool', { tool })
 export const toolDownloadSize = (tool: Tool) => call<number | null>('tool_download_size', { tool })
 /** Self-updates yt-dlp and gallery-dl; per-tool failures come back in `errors`, not as a throw. */

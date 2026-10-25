@@ -36,6 +36,9 @@ pub(crate) fn browser_client() -> Result<reqwest::Client, reqwest::Error> {
 }
 
 async fn fetch(url: &str, referer: Option<&str>) -> Result<String, LumiError> {
+    if !url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+        return Err(LumiError::new(ErrorCode::Unknown, format!("not an http(s) thumbnail URL: {url}")));
+    }
     let client = browser_client().map_err(net_err)?;
     let mut req = client.get(url);
     if let Some(r) = referer {
@@ -51,9 +54,12 @@ async fn fetch(url: &str, referer: Option<&str>) -> Result<String, LumiError> {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(';').next())
         .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("image/jpeg")
-        .to_owned();
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    // Only images become a `data:` URL; anything else (HTML, scripts, no type) is refused.
+    if !mime.starts_with("image/") {
+        return Err(LumiError::new(ErrorCode::Unknown, format!("thumbnail is not an image: {mime:?}")));
+    }
     let mut body = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(net_err)? {
         if body.len() + chunk.len() > MAX_BYTES {
@@ -126,6 +132,25 @@ mod tests {
         let (url, _req) = serve_once(http("image/jpeg", &vec![0u8; MAX_BYTES + 1])).await;
         let err = fetch(&url, None).await.unwrap_err();
         assert_eq!(err.error, ErrorCode::Unknown);
+    }
+
+    #[tokio::test]
+    async fn refuses_non_http_urls() {
+        for url in ["file:///C:/Windows/win.ini", "data:image/png;base64,AA==", "ftp://x/y.png", "not a url"] {
+            let err = fetch(url, None).await.unwrap_err();
+            assert_eq!(err.error, ErrorCode::Unknown, "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_non_image_content() {
+        for ct in ["text/html", "application/javascript", "image"] {
+            let (url, _req) = serve_once(http(ct, b"<script>")).await;
+            let err = fetch(&url, None).await.unwrap_err();
+            assert!(err.detail.contains("not an image"), "{ct}: {}", err.detail);
+        }
+        let (url, _req) = serve_once(http("IMAGE/WEBP", b"abc")).await;
+        assert_eq!(fetch(&url, None).await.unwrap(), "data:image/webp;base64,YWJj");
     }
 
     #[tokio::test]

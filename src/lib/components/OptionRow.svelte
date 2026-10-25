@@ -133,8 +133,10 @@
     try {
       follower.follow(await api.download(info.sourceUrl, opt.id, dest))
     } catch (e) {
-      follower.stop()
       const error = api.normalize(e)
+      // The same item is already downloading (another window, a double click): follow that job.
+      if (error.error.code === 'already_running') return follower.follow(error.detail)
+      follower.stop()
       if (needsFfmpeg(error)) await offerFfmpeg()
       else view = { s: 'error', error }
     }
@@ -259,7 +261,7 @@
 
   {#if view.s === 'error'}
     <div class="err">
-      <ErrorBanner error={view.error} {connected} compact onaction={onerror} />
+      <ErrorBanner error={view.error} {connected} compact during="download" onaction={onerror} />
     </div>
   {/if}
   <Notice {notice} --notice-space="6px 2px 0" />

@@ -68,9 +68,18 @@ fn parse_version(t: Tool, stdout: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.to_string())
 }
 
+fn version_args(t: Tool) -> Vec<OsString> {
+    let args: &[&str] = match t {
+        Tool::YtDlp => &["--ignore-config", "--version"],
+        Tool::GalleryDl => &["--config-ignore", "--version"],
+        Tool::Ffmpeg => &["-version"],
+        Tool::Deno => &["--version"],
+    };
+    args.iter().map(OsString::from).collect()
+}
+
 async fn tool_version(t: Tool) -> Option<String> {
-    let arg = if t == Tool::Ffmpeg { "-version" } else { "--version" };
-    let out = run_tool(t, &[arg.into()]).await.ok()?;
+    let out = run_tool(t, &version_args(t)).await.ok()?;
     if out.status != 0 {
         return None;
     }
@@ -90,6 +99,17 @@ pub async fn statuses() -> Vec<ToolStatus> {
 #[tauri::command]
 pub async fn tools_status() -> Vec<ToolStatus> {
     statuses().await
+}
+
+/// Which tools are on disk, without running any (`version` is None): the fast startup check.
+/// Settings asks `tools_status` for the versions.
+pub fn installed() -> Vec<ToolStatus> {
+    Tool::ALL.map(|tool| ToolStatus { tool, installed: tool_path(tool).exists(), version: None }).to_vec()
+}
+
+#[tauri::command]
+pub fn tools_installed() -> Vec<ToolStatus> {
+    installed()
 }
 
 #[tauri::command]
@@ -218,6 +238,21 @@ mod tests {
         let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["errors"][0]["tool"], "yt_dlp");
         assert_eq!(v["errors"][0]["error"]["error"]["code"], "unknown");
+    }
+
+    #[test]
+    fn installed_checks_files_without_running_them() {
+        let _g = paths::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("LUMI_BIN_DIR", dir.path()) };
+        let ran = dir.path().join("ran.txt");
+        std::fs::write(dir.path().join("yt-dlp.cmd"), format!("@echo off\r\necho x> \"{}\"\r\n", ran.display())).unwrap();
+        let list = installed();
+        unsafe { std::env::remove_var("LUMI_BIN_DIR") };
+        assert_eq!(list.len(), 4);
+        assert_eq!(list[0], ToolStatus { tool: Tool::YtDlp, installed: true, version: None });
+        assert!(list[1..].iter().all(|s| !s.installed && s.version.is_none()));
+        assert!(!ran.exists(), "no tool is started");
     }
 
     #[test]

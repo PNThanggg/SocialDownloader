@@ -49,6 +49,7 @@ export type ErrorCode =
   | { code: 'youtube_bot_check' }
   | { code: 'playlist_not_supported' }
   | { code: 'tool_missing'; tool: Tool }
+  | { code: 'already_running' }
   | { code: 'unknown' };
 
 export interface LumiError {

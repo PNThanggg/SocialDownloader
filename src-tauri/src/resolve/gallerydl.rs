@@ -4,16 +4,18 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::errors::{ErrorCode, classify};
+use crate::tools::runner::gallerydl_common_args;
 use crate::model::{Engine, MediaInfo, MediaItem, MediaOption, OptionId, OptionKind, OptionNote, Site};
 
-/// `-j` + optional `--cookies` + the URL. gallery-dl takes none of the yt-dlp common flags.
+/// The shared gallery-dl flags + `-j` + optional `--cookies` + `--` + the URL.
 pub fn gallerydl_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
-    let mut args = vec![OsString::from("-j")];
+    let mut args = gallerydl_common_args();
+    args.push("-j".into());
     if let Some(p) = cookies {
         args.push("--cookies".into());
         args.push(p.as_os_str().to_owned());
     }
-    args.push(url.into());
+    args.extend(["--".into(), url.into()]);
     args
 }
 
@@ -96,6 +98,19 @@ fn item_from(index: u32, url: &str, meta: &Value) -> MediaItem {
     }
 }
 
+/// `"{error}: {message}"` of the first `[-1, {error, message}]` message.
+fn error_text(messages: &[Value]) -> Option<String> {
+    let err = messages.iter().find(|m| m.get(0).and_then(Value::as_i64) == Some(-1))?.get(1)?;
+    let text = |k| err.get(k).and_then(Value::as_str).unwrap_or("");
+    Some(format!("{}: {}", text("error"), text("message")))
+}
+
+/// The error gallery-dl reported inside its `-j` output (it exits 0 and leaves stderr empty);
+/// this is the raw log behind "Show details".
+pub fn gallerydl_error_text(out: &str) -> Option<String> {
+    error_text(&serde_json::from_str::<Vec<Value>>(out).ok()?)
+}
+
 /// Turns `gallery-dl -j` output (a JSON array of `[type, ...]` messages) into `MediaInfo`.
 /// Type 3 = file, 6 = queued sub-URL (a profile/listing), 2 = directory metadata, -1 = error.
 pub fn parse_gallerydl_json(site: Site, url: &str, out: &str) -> Result<MediaInfo, ErrorCode> {
@@ -111,10 +126,7 @@ pub fn parse_gallerydl_json(site: Site, url: &str, out: &str) -> Result<MediaInf
         .filter_map(|m| Some((m.get(1)?.as_str()?, m.get(2)?)))
         .collect();
     if files.is_empty() {
-        let err = messages.iter().find(|m| kind(m) == Some(-1)).and_then(|m| m.get(1));
-        let text = |k| err.and_then(|e| e.get(k)).and_then(Value::as_str).unwrap_or("");
-        let message = format!("{}: {}", text("error"), text("message"));
-        return Err(classify(site, &message));
+        return Err(classify(site, &error_text(&messages).unwrap_or_default()));
     }
 
     let dir_meta = messages.iter().find(|m| kind(m) == Some(2)).and_then(|m| m.get(1));
@@ -241,6 +253,12 @@ mod tests {
             parse_gallerydl_json(Site::Instagram, "u", out),
             Err(ErrorCode::LoginRequired { site: Site::Instagram })
         );
+        assert_eq!(
+            gallerydl_error_text(out).as_deref(),
+            Some("AbortExtraction: HTTP redirect to login page (https://www.instagram.com/accounts/login/)")
+        );
+        assert_eq!(gallerydl_error_text("[]"), None);
+        assert_eq!(gallerydl_error_text("not json"), None);
     }
 
     #[test]
@@ -256,8 +274,8 @@ mod tests {
     #[test]
     fn gallerydl_args_have_cookies() {
         let a = gallerydl_resolve_args("https://u", Some(Path::new("cookies.txt")));
-        assert_eq!(a, ["-j", "--cookies", "cookies.txt", "https://u"].map(OsString::from));
-        let a = gallerydl_resolve_args("https://u", None);
-        assert_eq!(a, ["-j", "https://u"].map(OsString::from));
+        assert_eq!(a, ["--config-ignore", "-j", "--cookies", "cookies.txt", "--", "https://u"].map(OsString::from));
+        let a = gallerydl_resolve_args("-https://u", None);
+        assert_eq!(a, ["--config-ignore", "-j", "--", "-https://u"].map(OsString::from));
     }
 }
