@@ -14,7 +14,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(window_fx::WindowEffect::default())
-        .invoke_handler(tauri::generate_handler![window_fx::window_effect])
+        .manage(tools::ToolsState::default())
+        .invoke_handler(tauri::generate_handler![
+            window_fx::window_effect,
+            tools::tools_status,
+            tools::tool_download_size,
+            tools::install_tool,
+            tools::update_tools
+        ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window_fx::apply(&window);
