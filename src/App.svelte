@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { fly } from 'svelte/transition'
+  import { accounts, connectAccount, isConnected, refreshAccounts } from './lib/accounts'
   import * as api from './lib/api'
   import ErrorBanner from './lib/components/ErrorBanner.svelte'
   import LinkInput from './lib/components/LinkInput.svelte'
@@ -11,7 +12,7 @@
   import ToolPrompt from './lib/components/ToolPrompt.svelte'
   import { t, type ErrorAction } from './lib/i18n'
   import { askForTool, CORE_TOOLS, installWithProgress, isInstalled, toolRequests, toolStatuses } from './lib/tools'
-  import type { AccountStatus, LumiError, MediaInfo, Tool } from './lib/types'
+  import type { LumiError, MediaInfo, Tool } from './lib/types'
 
   let url = $state('')
   let busy = $state(false)
@@ -20,7 +21,6 @@
   /** The link behind `info`/`error`; retries reuse it even if the input changed. */
   let attempted = $state('')
   let lastResolved = $state('')
-  let accounts = $state<AccountStatus[]>([])
 
   /** `checking` shows the main screen while the tools are looked up; `setup` installs the missing core tools. */
   let phase = $state<'checking' | 'setup' | 'ready'>('checking')
@@ -32,17 +32,9 @@
   const active = $derived(busy || info !== null || error !== null)
   const connected = $derived.by(() => {
     const e = error?.error
-    return e?.code === 'login_required' && accounts.some((a) => a.site === e.site && a.connected)
+    return e?.code === 'login_required' && isConnected($accounts, e.site)
   })
   const denoMissing = $derived(isInstalled($toolStatuses, 'deno') === false)
-
-  async function refreshAccounts() {
-    try {
-      accounts = await api.accountsStatus()
-    } catch {
-      // Outside Tauri or the backend is unavailable: treat every site as not connected.
-    }
-  }
 
   /** Startup: the setup screen runs only when yt-dlp or gallery-dl is missing. */
   async function checkTools() {
@@ -53,11 +45,19 @@
     } catch {
       // Backend unavailable: skip setup; resolve reports a missing tool with a Reinstall button.
     }
-    phase = missing.length > 0 ? 'setup' : 'ready'
+    if (missing.length > 0) {
+      // Nothing read before the tools existed is worth keeping.
+      error = null
+      info = null
+      phase = 'setup'
+    } else {
+      phase = 'ready'
+    }
   }
 
   async function resolveLink(link = url.trim()) {
-    if (!link || busy) return
+    // Until the tool check is done a link could fail on a tool setup is about to install.
+    if (!link || busy || phase !== 'ready') return
     attempted = link
     busy = true
     error = null
@@ -89,7 +89,7 @@
       case 'connect':
       case 'reconnect': {
         if (e.code !== 'login_required') return false
-        const status = await api.connectAccount(e.site)
+        const status = await connectAccount(e.site)
         await refreshAccounts()
         return status.connected
       }
@@ -169,7 +169,13 @@
       <h1>{$t('hero.title')}</h1>
       <p class="sources">{$t('hero.sources')}</p>
       <div class="input">
-        <LinkInput bind:value={url} {busy} {lastResolved} onsubmit={() => resolveLink()} />
+        <LinkInput
+          bind:value={url}
+          {busy}
+          disabled={phase !== 'ready'}
+          {lastResolved}
+          onsubmit={() => resolveLink()}
+        />
       </div>
     </section>
 
@@ -181,7 +187,7 @@
           <ResultCard loading />
         {:else if info}
           {#key info}
-            <ResultCard {info} {accounts} onfix={fix} oninstalldeno={denoMissing ? installDeno : undefined} />
+            <ResultCard {info} accounts={$accounts} onfix={fix} oninstalldeno={denoMissing ? installDeno : undefined} />
           {/key}
         {/if}
       </section>
@@ -190,7 +196,7 @@
 {/if}
 
 {#if settingsOpen}
-  <SettingsPanel onclose={() => (settingsOpen = false)} onaccounts={(list) => (accounts = list)} />
+  <SettingsPanel onclose={() => (settingsOpen = false)} />
 {/if}
 
 <!-- One tool question at a time (ffmpeg from a row, deno before a YouTube link). -->

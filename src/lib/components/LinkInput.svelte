@@ -8,11 +8,14 @@
   let {
     value = $bindable(''),
     busy = false,
+    disabled = false,
     lastResolved = '',
     onsubmit,
   }: {
     value?: string
     busy?: boolean
+    /** Nothing can run yet (tools still being checked); typing still works. */
+    disabled?: boolean
     /** The link shown in the result card; never suggested again. */
     lastResolved?: string
     onsubmit: () => void
@@ -22,7 +25,7 @@
   let dismissed = ''
   let input: HTMLInputElement | undefined = $state()
 
-  const canRun = $derived(!busy && value.trim() !== '')
+  const canRun = $derived(!busy && !disabled && value.trim() !== '')
 
   function submit() {
     if (!canRun) return
@@ -51,7 +54,7 @@
   }
 
   function accept() {
-    if (!suggestion) return
+    if (!suggestion || disabled) return
     value = suggestion
     suggestion = null
     input?.focus()
@@ -101,7 +104,7 @@
 
   {#if suggestion}
     <div class="chip glass" transition:fly={{ y: -4, duration: 180 }}>
-      <button type="button" class="take" onclick={accept}>
+      <button type="button" class="take" {disabled} onclick={accept}>
         <svg viewBox="0 0 24 24" aria-hidden="true"
           ><rect x="6" y="4.5" width="12" height="16" rx="2.5" /><path d="M9.5 4.5h5v2.5h-5z" /></svg
         >

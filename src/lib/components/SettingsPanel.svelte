@@ -1,20 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { fade, fly } from 'svelte/transition'
+  import { get } from 'svelte/store'
+  import { accountActions, accountErrors, accounts, connectAccount, isConnected, refreshAccounts, signOut } from '../accounts'
   import * as api from '../api'
   import { language, setLanguage, t, toolName, type ErrorAction, type Language, type MessageKey } from '../i18n'
-  import { toolStatuses } from '../tools'
-  import type { AccountStatus, LumiError, Site, Tool } from '../types'
+  import { toolRequests, toolStatuses } from '../tools'
+  import type { LumiError, Site, Tool } from '../types'
   import ErrorBanner from './ErrorBanner.svelte'
 
-  let {
-    onclose,
-    onaccounts,
-  }: {
-    onclose: () => void
-    /** Called with the new list after a Connect or Sign out. */
-    onaccounts?: (accounts: AccountStatus[]) => void
-  } = $props()
+  let { onclose }: { onclose: () => void } = $props()
 
   const SITES: { site: Site; name: string }[] = [
     { site: 'instagram', name: 'Instagram' },
@@ -27,17 +22,10 @@
     { value: 'en', key: 'lang.en' },
   ]
 
-  let accounts = $state<AccountStatus[]>([])
-  /** The account action in flight per site. */
-  let busy = $state<Partial<Record<Site, 'connect' | 'signout'>>>({})
-  let accountErrors = $state<Partial<Record<Site, LumiError>>>({})
-
   let updating = $state(false)
   let updated = $state(false)
   let updateError = $state<LumiError | null>(null)
   let updatedTimer: ReturnType<typeof setTimeout> | undefined
-
-  const isConnected = (site: Site) => accounts.some((a) => a.site === site && a.connected)
 
   /** `deno 2.1.4 (stable, …)` → `2.1.4`: the name is already in the row and the build notes are noise. */
   function versionOf(tool: Tool): string | null | undefined {
@@ -51,10 +39,8 @@
   }
 
   onMount(() => {
-    api.accountsStatus().then(
-      (list) => (accounts = list),
-      () => {},
-    )
+    // A Connect still waiting on its login window keeps its state; the list is reloaded after it.
+    void refreshAccounts()
     api.toolsStatus().then(
       (list) => toolStatuses.set(list),
       () => {},
@@ -62,37 +48,9 @@
     return () => clearTimeout(updatedTimer)
   })
 
-  function setAccount(status: AccountStatus) {
-    accounts = accounts.some((a) => a.site === status.site)
-      ? accounts.map((a) => (a.site === status.site ? status : a))
-      : [...accounts, status]
-    onaccounts?.($state.snapshot(accounts))
-  }
-
-  async function connect(site: Site) {
-    busy[site] = 'connect'
-    delete accountErrors[site]
-    try {
-      setAccount(await api.connectAccount(site))
-    } catch (e) {
-      accountErrors[site] = api.normalize(e)
-    } finally {
-      delete busy[site]
-    }
-  }
-
-  async function signOut(site: Site) {
-    busy[site] = 'signout'
-    delete accountErrors[site]
-    try {
-      await api.disconnectAccount(site)
-      setAccount({ site, connected: false })
-    } catch (e) {
-      accountErrors[site] = api.normalize(e)
-    } finally {
-      delete busy[site]
-    }
-  }
+  // Failures land in `accountErrors`; nothing else to do with them here.
+  const connect = (site: Site) => void connectAccount(site).catch(() => {})
+  const disconnect = (site: Site) => void signOut(site).catch(() => {})
 
   async function update() {
     if (updating) return
@@ -116,7 +74,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') onclose()
+    // A tool prompt above the sheet takes this Escape for itself.
+    if (e.key === 'Escape' && get(toolRequests).length === 0) onclose()
   }
 </script>
 
@@ -144,9 +103,9 @@
       <h3>{$t('settings.accounts')}</h3>
       <div class="group">
         {#each SITES as { site, name } (site)}
-          {@const on = isConnected(site)}
-          {@const doing = busy[site]}
-          {@const err = accountErrors[site]}
+          {@const on = isConnected($accounts, site)}
+          {@const doing = $accountActions[site]?.kind}
+          {@const err = $accountErrors[site]}
           <div class="item account" data-site={site}>
             <span class="logo {site}" aria-hidden="true">
               {#if site === 'instagram'}
@@ -170,7 +129,7 @@
                 <span class="spinner"></span>
               </button>
             {:else if on}
-              <button type="button" class="btn btn-ghost" disabled={doing === 'signout'} onclick={() => signOut(site)}>
+              <button type="button" class="btn btn-ghost" disabled={doing === 'signout'} onclick={() => disconnect(site)}>
                 {#if doing === 'signout'}<span class="spinner"></span>{/if}
                 {$t('account.signOut')}
               </button>

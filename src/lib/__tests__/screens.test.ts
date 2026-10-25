@@ -61,12 +61,13 @@ vi.mock('@tauri-apps/plugin-store', () => ({
 }))
 
 import App from '../../App.svelte'
+import { accountActions, accountErrors, accounts, connectAccount } from '../accounts'
 import * as api from '../api'
 import SettingsPanel from '../components/SettingsPanel.svelte'
 import SetupScreen from '../components/SetupScreen.svelte'
 import ToolPrompt from '../components/ToolPrompt.svelte'
 import { language } from '../i18n'
-import { toolRequests, toolStatuses } from '../tools'
+import { askForTool, toolRequests, toolStatuses } from '../tools'
 
 const status = (tool: Tool, installed = true, version: string | null = installed ? '1.0' : null): ToolStatus => ({
   tool,
@@ -97,6 +98,9 @@ beforeEach(() => {
   h.progress = []
   toolRequests.set([])
   toolStatuses.set(null)
+  accounts.set([])
+  accountActions.set({})
+  accountErrors.set({})
   vi.clearAllMocks()
   vi.mocked(api.toolDownloadSize).mockResolvedValue(80 * MB)
 })
@@ -311,14 +315,40 @@ describe('App deno prompt', () => {
   })
 })
 
+describe('App startup', () => {
+  it('cannot read a link until the tool check is done, and setup leaves nothing stale', async () => {
+    const check = deferred<ToolStatus[]>()
+    vi.mocked(api.toolsStatus).mockReturnValue(check.promise)
+    vi.mocked(api.installTool).mockResolvedValue(status('yt_dlp'))
+    vi.mocked(api.resolve).mockRejectedValue({ error: { code: 'tool_missing', tool: 'yt_dlp' }, detail: '' })
+    render(App)
+
+    const input = screen.getByRole('textbox')
+    await fireEvent.input(input, { target: { value: 'https://www.youtube.com/watch?v=abc' } })
+    const go = screen.getByRole('button', { name: 'Get links' }) as HTMLButtonElement
+    expect(go.disabled).toBe(true)
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await fireEvent.click(go)
+    expect(api.resolve).not.toHaveBeenCalled()
+
+    check.resolve([status('yt_dlp', false), status('gallery_dl'), status('ffmpeg'), status('deno')])
+    await screen.findByText('Getting ready…')
+    await screen.findByText('Paste a link here')
+    expect(screen.queryByText('The yt-dlp tool is missing.')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(api.resolve).not.toHaveBeenCalled()
+    expect((screen.getByRole('button', { name: 'Get links' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
 describe('SettingsPanel', () => {
-  const accounts: AccountStatus[] = [
+  const signedIn: AccountStatus[] = [
     { site: 'instagram', connected: false },
     { site: 'facebook', connected: true },
   ]
 
   beforeEach(() => {
-    vi.mocked(api.accountsStatus).mockResolvedValue(accounts)
+    vi.mocked(api.accountsStatus).mockResolvedValue(signedIn)
     vi.mocked(api.toolsStatus).mockResolvedValue([
       status('yt_dlp', true, '2025.10.22'),
       status('gallery_dl', true, '1.30.10'),
@@ -340,12 +370,13 @@ describe('SettingsPanel', () => {
     expect(get(language)).toBe('auto')
   })
 
+  const rowOf = async (site: string) => (await screen.findByText(site)).closest('[data-site]') as HTMLElement
+
   it('shows a busy state while connectAccount is pending', async () => {
     const login = deferred<AccountStatus>()
     vi.mocked(api.connectAccount).mockReturnValue(login.promise)
-    const onaccounts = vi.fn()
-    render(SettingsPanel, { onclose: vi.fn(), onaccounts })
-    const row = (await screen.findByText('Instagram')).closest('[data-site]') as HTMLElement
+    render(SettingsPanel, { onclose: vi.fn() })
+    const row = await rowOf('Instagram')
     await within(row).findByText('Not connected')
     await fireEvent.click(within(row).getByRole('button', { name: 'Connect' }))
     expect(api.connectAccount).toHaveBeenCalledWith('instagram')
@@ -355,10 +386,52 @@ describe('SettingsPanel', () => {
     login.resolve({ site: 'instagram', connected: true })
     await within(row).findByText('Connected')
     expect(within(row).getByRole('button', { name: 'Sign out' })).toBeTruthy()
-    expect(onaccounts).toHaveBeenLastCalledWith([
+    // The shared list (error banners read it too) has the new state.
+    expect(get(accounts)).toEqual([
       { site: 'instagram', connected: true },
       { site: 'facebook', connected: true },
     ])
+  })
+
+  it('keeps a pending Connect across closing and reopening the panel', async () => {
+    const login = deferred<AccountStatus>()
+    vi.mocked(api.connectAccount).mockReturnValue(login.promise)
+    const first = render(SettingsPanel, { onclose: vi.fn() })
+    await within(await rowOf('Instagram')).findByText('Not connected')
+    await fireEvent.click(within(await rowOf('Instagram')).getByRole('button', { name: 'Connect' }))
+    first.unmount()
+
+    render(SettingsPanel, { onclose: vi.fn() })
+    await waitFor(() => expect(api.accountsStatus).toHaveBeenCalledTimes(2))
+    const row = await rowOf('Instagram')
+    expect(within(row).getByRole('button', { name: /Waiting for sign-in/ })).toBeTruthy()
+    expect(within(row).queryByRole('button', { name: 'Connect' })).toBeNull()
+
+    login.resolve({ site: 'instagram', connected: true })
+    await within(row).findByText('Connected')
+    expect(api.connectAccount).toHaveBeenCalledTimes(1)
+  })
+
+  it('joins a pending Connect instead of opening a second login', async () => {
+    const login = deferred<AccountStatus>()
+    vi.mocked(api.connectAccount).mockReturnValue(login.promise)
+    const a = connectAccount('instagram')
+    const b = connectAccount('instagram')
+    login.resolve({ site: 'instagram', connected: true })
+    expect(await a).toEqual(await b)
+    expect(api.connectAccount).toHaveBeenCalledTimes(1)
+    expect(get(accountActions)).toEqual({})
+  })
+
+  it('leaves Escape to a tool prompt shown above it', async () => {
+    const onclose = vi.fn()
+    render(SettingsPanel, { onclose })
+    void askForTool('ffmpeg')
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onclose).not.toHaveBeenCalled()
+    get(toolRequests)[0].settle(null)
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onclose).toHaveBeenCalledTimes(1)
   })
 
   it('signs out', async () => {

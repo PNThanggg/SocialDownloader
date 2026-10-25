@@ -1,6 +1,6 @@
 import { get, writable } from 'svelte/store'
 import * as api from './api'
-import type { Tool, ToolProgress, ToolStatus } from './types'
+import type { LumiError, Tool, ToolProgress, ToolStatus } from './types'
 
 /** Tools Lumi cannot read any link without; the setup screen installs them. */
 export const CORE_TOOLS: readonly Tool[] = ['yt_dlp', 'gallery_dl']
@@ -18,6 +18,9 @@ function remember(status: ToolStatus) {
     list?.some((s) => s.tool === status.tool) ? list.map((s) => (s.tool === status.tool ? status : s)) : [...(list ?? []), status],
   )
 }
+
+/** A download that failed only because ffmpeg is not installed yet (offer it, then retry). */
+export const needsFfmpeg = (e: LumiError): boolean => e.error.code === 'tool_missing' && e.error.tool === 'ffmpeg'
 
 /** Share of the download done, or null while the total size is unknown. */
 export function fractionOf(p: Pick<ToolProgress, 'downloaded' | 'total'>): number | null {
