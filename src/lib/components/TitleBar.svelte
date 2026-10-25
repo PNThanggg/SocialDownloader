@@ -17,9 +17,15 @@
 <header class="titlebar" data-tauri-drag-region>
   <span class="name" data-tauri-drag-region>Lumi</span>
   <div class="controls">
-    <button type="button" title={$t('titlebar.settings')} aria-label={$t('titlebar.settings')} onclick={() => onsettings?.()}>⚙</button>
-    <button type="button" title={$t('titlebar.minimize')} aria-label={$t('titlebar.minimize')} onclick={() => win()?.minimize()}>–</button>
-    <button type="button" class="close" title={$t('titlebar.close')} aria-label={$t('titlebar.close')} onclick={() => win()?.close()}>×</button>
+    <button type="button" title={$t('titlebar.settings')} aria-label={$t('titlebar.settings')} onclick={() => onsettings?.()}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+    </button>
+    <button type="button" title={$t('titlebar.minimize')} aria-label={$t('titlebar.minimize')} onclick={() => win()?.minimize()}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" /></svg>
+    </button>
+    <button type="button" class="close" title={$t('titlebar.close')} aria-label={$t('titlebar.close')} onclick={() => win()?.close()}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" /></svg>
+    </button>
   </div>
 </header>
 
@@ -46,8 +52,18 @@
     border: 0;
     background: transparent;
     color: var(--muted);
-    font-size: 16px;
+    display: grid;
+    place-items: center;
     cursor: pointer;
+  }
+  svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   button:hover {
     background: var(--glass-bg);

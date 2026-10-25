@@ -1,14 +1,36 @@
 :root {
   --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-bg-soft: rgba(255, 255, 255, 0.05);
+  --glass-bg-hover: rgba(255, 255, 255, 0.12);
   --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-border-soft: rgba(255, 255, 255, 0.08);
   --blur: 16px;
   --text: #f1f3f8;
   --muted: #b4b9c8;
+  --faint: #8a90a2;
   --primary-bg: rgba(255, 255, 255, 0.9);
+  --primary-bg-hover: #ffffff;
   --primary-fg: #1a1c24;
+  --ring: rgba(255, 255, 255, 0.45);
   --tag-mp3: #5be39a;
   --tag-mp4: #6aa8ff;
   --tag-img: #ffb35c;
+  --tag-mp3-bg: rgba(91, 227, 154, 0.14);
+  --tag-mp4-bg: rgba(106, 168, 255, 0.15);
+  --tag-img-bg: rgba(255, 179, 92, 0.15);
+  --danger: #ff9b9b;
+  --danger-bg: rgba(255, 99, 99, 0.1);
+  --danger-border: rgba(255, 120, 120, 0.28);
+  --radius-lg: 16px;
+  --radius: 12px;
+  --radius-sm: 9px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,
@@ -17,8 +39,18 @@ body {
   height: 100%;
   background: transparent;
   color: var(--text);
-  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif, 'Segoe UI Emoji';
+  font-size: 14px;
+  line-height: 1.4;
   color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Without Mica/Acrylic the window has no backdrop, so paint our own. */
@@ -29,8 +61,52 @@ html.fx-none body {
     #1a1c24;
 }
 
+/* Over Mica/Acrylic: a light tint keeps white text readable on a light system theme,
+   plus faint glows so the glass has something colored to frost. */
 html.fx-mica body,
 html.fx-acrylic body {
+  background:
+    radial-gradient(circle at 12% 6%, #3b5bdb2e, transparent 50%),
+    radial-gradient(circle at 92% 96%, #e649792a, transparent 48%),
+    rgba(16, 18, 26, 0.32);
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(106, 168, 255, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -38,5 +114,86 @@ html.fx-acrylic body {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(var(--blur));
-  border-radius: 12px;
+  border-radius: var(--radius);
+}
+
+/* Shared button looks. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    transform 0.1s var(--ease),
+    opacity 0.15s;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.55;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.btn-primary {
+  background: var(--primary-bg);
+  color: var(--primary-fg);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-bg-hover);
+}
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--glass-border-soft);
+  color: #eef0f5;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

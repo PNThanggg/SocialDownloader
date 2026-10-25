@@ -17,7 +17,8 @@ export function isLumiError(e: unknown): e is LumiError {
   return typeof err === 'object' && err !== null && typeof (err as { code?: unknown }).code === 'string'
 }
 
-function normalize(e: unknown): LumiError {
+/** Any thrown value as a LumiError (unknown + its text when it is not one already). */
+export function normalize(e: unknown): LumiError {
   if (isLumiError(e)) return e
   return { error: { code: 'unknown' }, detail: String(e) }
 }
@@ -47,6 +48,7 @@ export const disconnectAccount = (site: Site) => call<void>('disconnect_account'
 
 export const fetchThumbnail = (url: string, site: Site) => call<string>('fetch_thumbnail', { url, site })
 export const defaultFilename = (title: string, ext: string) => call<string>('default_filename', { title, ext })
+export const windowEffect = () => call<'mica' | 'acrylic' | 'none'>('window_effect')
 
 export const onJob = (cb: (e: JobEvent) => void): Promise<UnlistenFn> =>
   listen<JobEvent>('lumi://job', (ev) => cb(ev.payload))

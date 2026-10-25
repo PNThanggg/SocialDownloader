@@ -1,26 +1,222 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import * as api from './lib/api'
+  import ErrorBanner from './lib/components/ErrorBanner.svelte'
+  import LinkInput from './lib/components/LinkInput.svelte'
+  import ResultCard from './lib/components/ResultCard.svelte'
   import TitleBar from './lib/components/TitleBar.svelte'
-  import { t } from './lib/i18n'
+  import { t, type ErrorAction } from './lib/i18n'
+  import type { AccountStatus, LumiError, MediaInfo } from './lib/types'
+
+  let url = $state('')
+  let busy = $state(false)
+  let info = $state<MediaInfo | null>(null)
+  let error = $state<LumiError | null>(null)
+  /** The link behind `info`/`error`; retries reuse it even if the input changed. */
+  let attempted = $state('')
+  let lastResolved = $state('')
+  let accounts = $state<AccountStatus[]>([])
+
+  const active = $derived(busy || info !== null || error !== null)
+  const connected = $derived.by(() => {
+    const e = error?.error
+    return e?.code === 'login_required' && accounts.some((a) => a.site === e.site && a.connected)
+  })
+
+  async function refreshAccounts() {
+    try {
+      accounts = await api.accountsStatus()
+    } catch {
+      // Outside Tauri or the backend is unavailable: treat every site as not connected.
+    }
+  }
+
+  async function resolveLink(link = url.trim()) {
+    if (!link || busy) return
+    attempted = link
+    busy = true
+    error = null
+    info = null
+    try {
+      info = await api.resolve(link)
+      lastResolved = link
+    } catch (e) {
+      error = api.normalize(e)
+      void refreshAccounts()
+    } finally {
+      busy = false
+    }
+  }
+
+  /** Runs the side effect behind an error button; true when the failed step should run again. */
+  async function fix(action: ErrorAction, err: LumiError): Promise<boolean> {
+    const e = err.error
+    switch (action) {
+      case 'connect':
+      case 'reconnect': {
+        if (e.code !== 'login_required') return false
+        const status = await api.connectAccount(e.site)
+        await refreshAccounts()
+        return status.connected
+      }
+      case 'update':
+        await api.updateTools()
+        return true
+      case 'reinstall':
+        if (e.code !== 'tool_missing') return false
+        await api.installTool(e.tool)
+        return true
+      case 'retry':
+        return true
+      case 'details':
+        return false
+    }
+  }
+
+  async function onResolveError(action: ErrorAction) {
+    if (!error) return
+    try {
+      if (await fix(action, error)) await resolveLink(attempted)
+    } catch (e) {
+      error = api.normalize(e)
+    }
+  }
+
+  onMount(() => {
+    void refreshAccounts()
+    if (import.meta.env.DEV) {
+      // Dev-only fixtures: `?demo=tiktok` or VITE_LUMI_DEMO=tiktok:vi (see lib/dev/demo.ts).
+      const name = new URLSearchParams(location.search).get('demo') ?? import.meta.env.VITE_LUMI_DEMO
+      if (name) {
+        void import('./lib/dev/demo').then(({ demo }) => {
+          const d = demo(name)
+          url = d.url
+          info = d.info ?? null
+          error = d.error ?? null
+          busy = d.busy ?? false
+          if (d.info) lastResolved = d.url
+        })
+      }
+    }
+  })
 </script>
 
 <TitleBar />
-<main>
-  <h1>{$t('hero.title')}</h1>
-  <p>{$t('hero.sources')}</p>
+<main class:active>
+  <section class="hero">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32">
+        <defs>
+          <linearGradient id="lumi-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#8fbcff" />
+            <stop offset="1" stop-color="#f27aa8" />
+          </linearGradient>
+        </defs>
+        <path
+          fill="url(#lumi-g)"
+          d="M16 3.5c.9 5.6 3.1 8.9 7.6 10.4l1.9.6-1.9.6C19.1 16.6 16.9 19.9 16 25.5c-.9-5.6-3.1-8.9-7.6-10.4l-1.9-.6 1.9-.6C12.9 12.4 15.1 9.1 16 3.5z"
+        />
+        <circle cx="24.5" cy="24" r="2.2" fill="url(#lumi-g)" opacity=".85" />
+      </svg>
+    </div>
+    <h1>{$t('hero.title')}</h1>
+    <p class="sources">{$t('hero.sources')}</p>
+    <div class="input">
+      <LinkInput bind:value={url} {busy} {lastResolved} onsubmit={() => resolveLink()} />
+    </div>
+  </section>
+
+  {#if active}
+    <section class="results" in:fly={{ y: 10, duration: 220 }}>
+      {#if error}
+        <ErrorBanner {error} {connected} onaction={onResolveError} />
+      {:else if busy}
+        <ResultCard loading />
+      {:else if info}
+        {#key info}
+          <ResultCard {info} {accounts} onfix={fix} />
+        {/key}
+      {/if}
+    </section>
+  {/if}
 </main>
 
 <style>
   main {
-    padding: 48px 24px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 20px 20px;
+    scrollbar-gutter: stable both-edges;
+  }
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     text-align: center;
+    padding-top: calc(24vh - 30px);
+    transition: padding-top 0.35s var(--ease);
+  }
+  main.active .hero {
+    padding-top: 14px;
+  }
+  .mark {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 18px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(var(--blur));
+    box-shadow:
+      0 10px 30px -12px rgba(120, 150, 255, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    transition:
+      opacity 0.25s var(--ease),
+      transform 0.35s var(--ease),
+      height 0.35s var(--ease),
+      margin 0.35s var(--ease);
+  }
+  .mark svg {
+    width: 30px;
+    height: 30px;
+  }
+  main.active .mark {
+    opacity: 0;
+    height: 0;
+    margin-bottom: 0;
+    transform: scale(0.6);
+    border-width: 0;
   }
   h1 {
-    margin: 0 0 8px;
-    font-size: 28px;
-    font-weight: 600;
+    margin: 0 0 6px;
+    font-size: 26px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    transition: font-size 0.35s var(--ease);
   }
-  p {
+  main.active h1 {
+    font-size: 20px;
+  }
+  .sources {
     margin: 0;
+    font-size: 12.5px;
     color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+  .input {
+    width: 100%;
+    max-width: 460px;
+    margin-top: 22px;
+  }
+  main.active .input {
+    margin-top: 16px;
+  }
+  .results {
+    max-width: 460px;
+    margin: 16px auto 0;
   }
 </style>

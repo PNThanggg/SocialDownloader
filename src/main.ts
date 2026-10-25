@@ -1,18 +1,14 @@
 import { mount } from 'svelte'
-import { invoke } from '@tauri-apps/api/core'
 import './styles/glass.css'
 import App from './App.svelte'
+import { windowEffect } from './lib/api'
 import { initLanguage } from './lib/i18n'
 
-const app = mount(App, {
-  target: document.getElementById('app')!,
-})
-
-// After mount, so a slow or failing backend call never blocks first paint.
+// Not awaited: a slow or failing backend call must never block first paint.
 async function applyWindowEffect() {
   let fx = 'none'
   try {
-    fx = await invoke<string>('window_effect')
+    fx = await windowEffect()
   } catch {
     // Not running inside Tauri (e.g. plain browser): use the fallback backdrop.
   }
@@ -20,6 +16,11 @@ async function applyWindowEffect() {
 }
 
 void applyWindowEffect()
-void initLanguage()
+// Awaited so the first frame is already in the chosen language (readLanguage never throws).
+await initLanguage()
+
+const app = mount(App, {
+  target: document.getElementById('app')!,
+})
 
 export default app
