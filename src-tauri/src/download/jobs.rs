@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
 
-use super::args::{build_plan, ffmpeg_command_args, needs_ffmpeg, FfInput, Plan};
+use super::args::{build_plan, ffmpeg_command_args, needs_ffmpeg, FfInput, Plan, PROGRESS_TEMPLATE};
 use super::progress::parse_progress;
 use crate::accounts::{cookie_file_for, TempCookieFile};
 use crate::errors::{classify, ErrorCode, LumiError};
@@ -372,6 +372,20 @@ async fn run_plan(
     }
 }
 
+/// Deletes `<stem>.*` files (`.part`, `.ytdl`, pre-conversion media) this job left next to `dest`.
+fn remove_stem_leftovers(dest: &Path, started: SystemTime) {
+    let Some(stem) = dest.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else { return };
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        let fresh = e.metadata().ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).is_some_and(|m| m >= started);
+        if name.starts_with(&format!("{stem}.")) && fresh {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Removes the job tmp dir; the dying child may still hold files for a moment.
 async fn remove_tmp(dir: &Path) {
     for _ in 0..20 {
@@ -383,6 +397,14 @@ async fn remove_tmp(dir: &Path) {
 }
 
 impl JobManager {
+    fn ensure_not_running(&self, key: &(String, String)) -> Result<(), LumiError> {
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        match jobs.iter().find(|(_, h)| &h.key == key) {
+            Some((existing, _)) => Err(unknown(existing.clone())),
+            None => Ok(()),
+        }
+    }
+
     fn register(&self, job_id: &str, key: (String, String), cancel: Arc<Cancel>) -> Result<(), LumiError> {
         let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((existing, _)) = jobs.iter().find(|(_, h)| h.key == key) {
@@ -424,6 +446,8 @@ impl JobManager {
         if needs_ffmpeg(&info, &opt) && !tool_path(Tool::Ffmpeg).exists() {
             return Err(LumiError::new(ErrorCode::ToolMissing { tool: Tool::Ffmpeg }, "ffmpeg is not installed"));
         }
+        // Reject duplicates before any cookie file is decrypted to disk.
+        self.ensure_not_running(&(url.clone(), option_id.clone()))?;
         let job_id = uuid::Uuid::new_v4().to_string();
         let tmp = tmp_dir().join(&job_id);
         let cookies = cookie_file_for(info.site)?;
@@ -438,6 +462,11 @@ impl JobManager {
         &self, sink: Arc<dyn JobSink>, cache: &ResolveCache, url: String, dest_dir: PathBuf,
     ) -> Result<String, LumiError> {
         let info = Self::media_info(&url, cache).await?;
+        if info.engine == Engine::YtDlp && !tool_path(Tool::Ffmpeg).exists() {
+            // `bv*+ba` merges, which needs ffmpeg.
+            return Err(LumiError::new(ErrorCode::ToolMissing { tool: Tool::Ffmpeg }, "ffmpeg is not installed"));
+        }
+        self.ensure_not_running(&(url.clone(), "all".to_owned()))?;
         let job_id = uuid::Uuid::new_v4().to_string();
         let tmp = tmp_dir().join(&job_id);
         let cookies = cookie_file_for(info.site)?;
@@ -458,7 +487,12 @@ impl JobManager {
                 a.extend([
                     "-o".into(),
                     format!("{dir}\\%(title).80B [%(id)s].%(ext)s").into(),
+                    "-f".into(),
+                    "bv*+ba[format_id!=audio]/b".into(),
                     "--force-overwrites".into(),
+                    "--newline".into(),
+                    "--progress-template".into(),
+                    PROGRESS_TEMPLATE.into(),
                 ]);
                 if let Some(c) = cookie_path {
                     a.extend(["--cookies".into(), c.into()]);
@@ -525,6 +559,7 @@ impl JobManager {
                 if !dest_existed || modified_after_start {
                     let _ = std::fs::remove_file(dest);
                 }
+                remove_stem_leftovers(dest, started);
             }
         }
         remove_tmp(&tmp).await;
@@ -805,6 +840,47 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&dest).unwrap().trim(), "old");
     }
 
+    #[tokio::test]
+    async fn cancel_removes_part_files_in_dest_dir() {
+        let env = Env::new();
+        let dest = env.out.path().join("clip.mp3");
+        let part = env.out.path().join("clip.webm.part");
+        let other = env.out.path().join("unrelated.txt");
+        std::fs::write(&other, "keep").unwrap();
+        env.tool("ffmpeg", "exit /b 0");
+        env.tool(
+            "yt-dlp",
+            &format!("echo LUMI^|1^|100^|NA\r\necho x> \"{}\"\r\nping -n 30 127.0.0.1 >nul", part.display()),
+        );
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        let id = m.start(sink.clone(), &seeded_cache(), URL.into(), "0/audio".into(), dest).await.unwrap();
+        wait_until("part file", || part.exists()).await;
+        m.cancel(&id).unwrap();
+        wait_until("final event", || sink.is_final()).await;
+        assert_eq!(sink.events().last().unwrap().state, JobState::Cancelled);
+        assert!(!part.exists());
+        assert!(other.exists());
+        assert!(!env.tmp.path().join(&id).exists());
+    }
+
+    #[tokio::test]
+    async fn download_all_ytdlp_needs_ffmpeg_and_uses_selector() {
+        let env = Env::new();
+        let m = JobManager::default();
+        let sink = Arc::new(VecSink::default());
+        let err = m.start_all(sink.clone(), &seeded_cache(), URL.into(), env.out.path().to_path_buf()).await.unwrap_err();
+        assert_eq!(err.error, ErrorCode::ToolMissing { tool: Tool::Ffmpeg });
+        assert_eq!(m.active(), 0);
+        env.tool("ffmpeg", "exit /b 0");
+        let out = env.out.path().to_path_buf();
+        env.tool("yt-dlp", &format!("echo %* > \"{}\"", out.join("args.txt").display()));
+        m.start_all(sink.clone(), &seeded_cache(), URL.into(), out.clone()).await.unwrap();
+        wait_until("final event", || sink.is_final()).await;
+        let args = std::fs::read_to_string(out.join("args.txt")).unwrap();
+        assert!(args.contains("bv*+ba[format_id!=audio]/b") && args.contains("--newline") && args.contains("--progress-template"), "{args}");
+    }
+
     #[test]
     fn job_event_json_shape() {
         let e = JobEvent { job_id: "j".into(), url: "u".into(), option_id: "0/audio".into(), state: JobState::Progress { fraction: Some(0.5) } };
@@ -870,7 +946,12 @@ mod tests {
             let text = String::from_utf8_lossy(&probe.stdout).into_owned();
             println!("{text}");
             if opt == "0/audio" {
-                assert!(text.contains("title="), "no title tag");
+                let tag = |k: &str| {
+                    text.lines().find_map(|l| l.strip_prefix(&format!("TAG:{k}="))).map(str::to_owned).unwrap_or_default()
+                };
+                let title = tag("title");
+                assert!(!title.is_empty() && (info.title.starts_with(&title) || title.starts_with(&info.title)), "title tag {title:?} vs {:?}", info.title);
+                assert_eq!(Some(tag("artist")), info.author, "artist tag");
             }
         }
     }

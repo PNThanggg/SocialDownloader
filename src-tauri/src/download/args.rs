@@ -6,7 +6,7 @@ use crate::model::{Engine, MediaInfo, MediaOption, OptionId, OptionNote};
 use crate::tools::runner::ytdlp_common_args;
 
 const TIKTOK_REFERER: &str = "https://www.tiktok.com/";
-const PROGRESS_TEMPLATE: &str = "download:LUMI|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s";
+pub(crate) const PROGRESS_TEMPLATE: &str = "download:LUMI|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FfInput {
@@ -97,16 +97,27 @@ fn ytdlp_plan(
         _ => return Err(ErrorCode::Unknown),
     }
     if needs_ffmpeg(info, opt) {
-        a.push("--embed-metadata".into());
+        // meta_* fields win over embedded ones: tag with the video's title/author, not TikTok's music info.
+        a.extend(os(&[
+            "--embed-metadata",
+            "--parse-metadata",
+            "title:%(meta_title)s",
+            "--parse-metadata",
+            "%(uploader,channel,creator)s:%(meta_artist)s",
+        ]));
     }
     let stem = dest.file_stem().ok_or(ErrorCode::Unknown)?;
     let dir = dest.parent().unwrap_or_else(|| Path::new(""));
-    // `-o` is an output template as a whole: escape `%` in the directory too.
-    let base = dir.join(stem).to_string_lossy().replace('%', "%%");
-    let template = format!("{base}.%(ext)s");
+    // yt-dlp ignores `-P temp:` when `-o` is absolute: use a relative template plus `-P home:`.
+    // `-P` values are plain paths (not templates); only the `-o` stem is `%`-escaped.
+    let template = format!("{}.%(ext)s", stem.to_string_lossy().replace('%', "%%"));
+    let mut home = OsString::from("home:");
+    home.push(dir);
     let mut temp = OsString::from("temp:");
     temp.push(tmp);
     a.extend(os(&["--force-overwrites", "-P"]));
+    a.push(home);
+    a.push("-P".into());
     a.push(temp);
     a.push("-o".into());
     a.push(template.into());
@@ -248,9 +259,11 @@ mod tests {
         }
         assert_eq!(after(&a, "-f"), "ba[format_id!=audio]/b");
         let o = after(&a, "-o");
-        assert!(o.ends_with(r"My Clip.%(ext)s"), "{o}");
-        assert!(o.starts_with(r"C:\out"));
-        assert_eq!(after(&a, "-P"), r"temp:C:\tmp\job");
+        assert_eq!(o, "My Clip.%(ext)s");
+        assert_eq!(after(&a, "-P"), r"home:C:\out");
+        assert!(a.windows(2).any(|w| w[0] == "-P" && w[1] == r"temp:C:\tmp\job"));
+        assert_eq!(after(&a, "--parse-metadata"), "title:%(meta_title)s");
+        assert!(a.contains(&"%(uploader,channel,creator)s:%(meta_artist)s".to_string()));
         assert_eq!(a.last().unwrap(), "https://x.test/v");
     }
 
@@ -276,7 +289,7 @@ mod tests {
         let i = info(Site::Tiktok, Engine::YtDlp, 1, vec![]);
         let c = PathBuf::from(r"C:\tmp\c.txt");
         let a = ytdlp_args(&build_plan(&i, &OptionId::Audio { item: 0 }, &PathBuf::from(r"C:\out\100% sure.mp3"), &tmp(), Some(&c)).unwrap());
-        assert!(after(&a, "-o").ends_with("100%% sure.%(ext)s"));
+        assert_eq!(after(&a, "-o"), "100%% sure.%(ext)s");
         assert_eq!(after(&a, "--cookies"), r"C:\tmp\c.txt");
         assert_eq!(a.last().unwrap(), "https://x.test/v");
     }
@@ -285,14 +298,16 @@ mod tests {
     fn plan_percent_in_directory_escaped() {
         let i = info(Site::Tiktok, Engine::YtDlp, 1, vec![]);
         let a = ytdlp_args(&build_plan(&i, &OptionId::Audio { item: 0 }, &PathBuf::from(r"C:\Videos\50% off\clip.mp3"), &tmp(), None).unwrap());
-        assert_eq!(after(&a, "-o"), r"C:\Videos\50%% off\clip.%(ext)s");
+        assert_eq!(after(&a, "-o"), "clip.%(ext)s");
+        assert_eq!(after(&a, "-P"), r"home:C:\Videos\50% off");
     }
 
     #[test]
     fn plan_non_ascii_dest_roundtrips() {
         let i = info(Site::Tiktok, Engine::YtDlp, 1, vec![]);
         let a = ytdlp_args(&build_plan(&i, &OptionId::Audio { item: 0 }, &PathBuf::from(r"D:\Nhạc\Bài hát 🎧.mp3"), &tmp(), None).unwrap());
-        assert_eq!(after(&a, "-o"), r"D:\Nhạc\Bài hát 🎧.%(ext)s");
+        assert_eq!(after(&a, "-o"), "Bài hát 🎧.%(ext)s");
+        assert_eq!(after(&a, "-P"), r"home:D:\Nhạc");
     }
 
     #[test]
