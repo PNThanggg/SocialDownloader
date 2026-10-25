@@ -1187,6 +1187,88 @@ mod tests {
         assert!(args.contains(&format!("part-directory={}", env.tmp.path().display())), "{args}");
     }
 
+    /// Real tools: (a) a Facebook `0/video:0` row downloads, (b) a playlist link fails fast,
+    /// (c) a YouTube combined row downloads with ffmpeg absent.
+    /// `cargo test live_fb_and_playlist -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "hits the network and downloads yt-dlp and deno, then ffmpeg (~200MB) to probe the result"]
+    async fn live_fb_and_playlist() {
+        let env = Env::new();
+        // deno: without it YouTube offers no combined (video+audio) format at all.
+        for t in [Tool::YtDlp, Tool::Deno] {
+            crate::tools::install::install_with(t, &mut |_, _| {}).await.unwrap();
+        }
+        let m = JobManager::default();
+        let cache = ResolveCache::default();
+        let run = |url: &'static str, opt: String, dest: PathBuf| {
+            let (m, cache) = (m.clone(), cache.clone());
+            async move {
+                let sink = Arc::new(VecSink::default());
+                m.start(sink.clone(), &cache, url.into(), opt, dest).await.unwrap();
+                wait_until("final event", || sink.is_final()).await;
+                sink.events().last().unwrap().state.clone()
+            }
+        };
+
+        // (b) playlist: flat, so PlaylistNotSupported comes back quickly.
+        let t = Instant::now();
+        let pl = resolve_url("https://www.youtube.com/playlist?list=PL59FEE129ADFF2B12", &cache).await;
+        let took = t.elapsed();
+        println!("playlist: {:?} in {took:?}", pl.as_ref().map(|i| i.title.clone()).map_err(|e| e.error.clone()));
+        assert_eq!(pl.unwrap_err().error, ErrorCode::PlaylistNotSupported);
+        assert!(took < Duration::from_secs(15), "took {took:?}");
+
+        // (a) Facebook: unknown height, so the row is `0/video:0`.
+        let fb_url = "https://www.facebook.com/watch/?v=10153231379946729";
+        let fb = resolve_url(fb_url, &cache).await;
+        match fb {
+            Ok(info) => {
+                let ids: Vec<_> = info.items[0].options.iter().map(|o| o.id.clone()).collect();
+                println!("facebook: {:?} options={ids:?}", info.title);
+                assert!(ids.contains(&"0/video:0".to_string()));
+                let dest = env.out.path().join("fb.mp4");
+                let state = run(fb_url, "0/video:0".into(), dest.clone()).await;
+                println!("facebook 0/video:0: {state:?}");
+                assert!(matches!(state, JobState::Done { .. }), "{state:?}");
+                println!("facebook: {} bytes", std::fs::metadata(&dest).unwrap().len());
+            }
+            Err(e) => println!("facebook blocked anonymous access: {:?} {}", e.error, e.detail),
+        }
+
+        // (c) YouTube combined row with ffmpeg absent.
+        assert!(!tool_path(Tool::Ffmpeg).exists());
+        let yt_url = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+        let info = resolve_url(yt_url, &cache).await.unwrap();
+        let combined = info.items[0]
+            .options
+            .iter()
+            .find(|o| o.kind == crate::model::OptionKind::Video && o.note.is_none())
+            .expect("a combined row")
+            .clone();
+        println!("youtube combined row: {} ({})", combined.id, combined.label);
+        let dest = env.out.path().join("yt.mp4");
+        let state = run(yt_url, combined.id.clone(), dest.clone()).await;
+        println!("youtube {}: {state:?}", combined.id);
+        assert!(matches!(state, JobState::Done { .. }), "{state:?}");
+        let JobState::Done { path } = state else { unreachable!() };
+        let size = std::fs::metadata(&path).unwrap().len();
+        println!("youtube: {path} {size} bytes");
+
+        // Playable: probe it (ffmpeg only now, after the download).
+        crate::tools::install::install_with(Tool::Ffmpeg, &mut |_, _| {}).await.unwrap();
+        for p in [Some(PathBuf::from(&path)), Some(env.out.path().join("fb.mp4")).filter(|p| p.exists())].into_iter().flatten() {
+            let probe = std::process::Command::new(env.bin.path().join("ffprobe.exe"))
+                .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0"])
+                .arg(&p)
+                .output()
+                .unwrap();
+            let streams = String::from_utf8_lossy(&probe.stdout).into_owned();
+            println!("{}: streams {:?}", p.display(), streams.lines().collect::<Vec<_>>());
+            assert!(probe.status.success());
+            assert!(streams.contains("video") && streams.contains("audio"), "{streams}");
+        }
+    }
+
     /// Real tools, real TikTok. `cargo test live_download_tiktok_mp3 -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "hits the network and downloads yt-dlp and ffmpeg (~200MB)"]

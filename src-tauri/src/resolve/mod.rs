@@ -19,7 +19,7 @@ use crate::tools::runner::run_tool;
 pub use cache::ResolveCache;
 use gallerydl::{gallerydl_error_text, gallerydl_resolve_args, parse_gallerydl_json, primary_engine};
 use tiktok_sound::{fetch_tiktok_sound, ytdlp_sound_fallback};
-use ytdlp::{parse_ytdlp_json, ytdlp_resolve_args};
+use ytdlp::{needs_full_extraction, parse_ytdlp_json, ytdlp_resolve_args, ytdlp_resolve_args_full};
 
 static NO_VIDEO: Lazy<Regex> = Lazy::new(|| {
     RegexBuilder::new(r"There is no video|No video formats found").case_insensitive(true).build().expect("valid regex")
@@ -46,7 +46,10 @@ async fn run_engine(engine: Engine, site: Site, url: &str) -> Result<(MediaInfo,
         Engine::YtDlp => (Tool::YtDlp, ytdlp_resolve_args(url, cookie_path)),
         Engine::GalleryDl => (Tool::GalleryDl, gallerydl_resolve_args(url, cookie_path)),
     };
-    let out = run_tool(tool, &args).await?;
+    let mut out = run_tool(tool, &args).await?;
+    if out.status == 0 && engine == Engine::YtDlp && needs_full_extraction(site, &out.stdout) {
+        out = run_tool(tool, &ytdlp_resolve_args_full(url, cookie_path)).await?;
+    }
     if out.status != 0 {
         return Err(LumiError::new(classify(site, &out.stderr), out.stderr));
     }
@@ -277,6 +280,21 @@ mod tests {
         unsafe { std::env::remove_var("LUMI_BIN_DIR") };
         assert_eq!(info.engine, Engine::YtDlp);
         assert_eq!(info.site, Site::Instagram);
+    }
+
+    /// A Facebook post whose flat result has only link entries is read again, fully.
+    #[tokio::test]
+    async fn facebook_link_entries_are_extracted_fully() {
+        let (_g, dir) = with_bin_dir();
+        let flat = r#"{"_type":"playlist","id":"p","title":"t","entries":[{"_type":"url","url":"https://www.facebook.com/x/videos/1/"}]}"#;
+        let full = include_str!("../../tests/fixtures/ytdlp/facebook_reel.json");
+        std::fs::write(dir.path().join("flat.out"), flat).unwrap();
+        std::fs::write(dir.path().join("full.out"), full).unwrap();
+        let script = "@echo off\r\necho %* | findstr /C:\"--flat-playlist\" >nul && (type \"%~dp0flat.out\" & exit /b 0)\r\ntype \"%~dp0full.out\"\r\n";
+        std::fs::write(dir.path().join("yt-dlp.cmd"), script).unwrap();
+        let info = resolve_url("https://www.facebook.com/x/videos/1/", &ResolveCache::default()).await.unwrap();
+        unsafe { std::env::remove_var("LUMI_BIN_DIR") };
+        assert_eq!(info.items[0].options[0].id, "0/video:0");
     }
 
     #[tokio::test]

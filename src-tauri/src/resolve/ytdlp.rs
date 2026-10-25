@@ -27,12 +27,24 @@ struct YtInfo {
     formats: Option<Vec<YtFormat>>,
 }
 
-/// `-J` + the shared yt-dlp flags + optional `--cookies` + the URL.
-/// `--flat-playlist`: a playlist/channel link lists its entries without extracting each one, so it
-/// fails fast with PlaylistNotSupported. Carousel entries (Instagram/Facebook) are full info dicts and
-/// are unaffected.
+/// `-J --flat-playlist` + the shared yt-dlp flags + optional `--cookies` + `--` + the URL.
+/// Flat: a playlist/channel link lists its entries without extracting each one, so it fails fast
+/// with PlaylistNotSupported. Instagram/Facebook carousel entries are full info dicts and unaffected;
+/// the rare post whose entries are only links is read again with `ytdlp_resolve_args_full`.
 pub fn ytdlp_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
-    let mut args = vec![OsString::from("-J"), OsString::from("--flat-playlist")];
+    resolve_args(url, cookies, true)
+}
+
+/// Like `ytdlp_resolve_args`, but every playlist entry is extracted.
+pub fn ytdlp_resolve_args_full(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
+    resolve_args(url, cookies, false)
+}
+
+fn resolve_args(url: &str, cookies: Option<&Path>, flat: bool) -> Vec<OsString> {
+    let mut args = vec![OsString::from("-J")];
+    if flat {
+        args.push("--flat-playlist".into());
+    }
     args.extend(ytdlp_common_args());
     if let Some(p) = cookies {
         args.push("--cookies".into());
@@ -41,6 +53,20 @@ pub fn ytdlp_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
     // `--`: a URL is never read as an option.
     args.extend(["--".into(), url.into()]);
     args
+}
+
+/// A flat (`--flat-playlist`) Instagram/Facebook result whose entries are bare links (no formats):
+/// it must be read again without `--flat-playlist` to list their formats.
+pub fn needs_full_extraction(site: Site, json: &str) -> bool {
+    if !matches!(site, Site::Instagram | Site::Facebook) {
+        return false;
+    }
+    let Ok(info) = serde_json::from_str::<YtInfo>(json) else { return false };
+    info.entries
+        .iter()
+        .flatten()
+        .flatten()
+        .any(|e| matches!(e.kind.as_deref(), Some("url" | "url_transparent")))
 }
 
 fn item_from(site: Site, index: u32, info: &YtInfo, has_deno: bool) -> MediaItem {
@@ -267,6 +293,19 @@ mod tests {
     fn resolve_args_are_flat() {
         let s: Vec<String> = ytdlp_resolve_args("u", None).iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(s.iter().any(|a| a == "--flat-playlist"));
+    }
+
+    #[test]
+    fn full_extraction_only_for_link_entries_on_carousel_sites() {
+        let links = r#"{"_type":"playlist","id":"p","entries":[{"_type":"url","url":"https://www.facebook.com/x/videos/1/"}]}"#;
+        assert!(needs_full_extraction(Site::Facebook, links));
+        assert!(needs_full_extraction(Site::Instagram, links));
+        assert!(!needs_full_extraction(Site::Youtube, links), "YouTube playlists are rejected, not re-read");
+        assert!(!needs_full_extraction(Site::Instagram, INSTAGRAM), "full carousel entries parse as they are");
+        assert!(!needs_full_extraction(Site::Facebook, FACEBOOK));
+        let full: Vec<String> = ytdlp_resolve_args_full("u", None).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(!full.contains(&"--flat-playlist".to_string()));
+        assert_eq!(full[full.len() - 2..], ["--", "u"]);
     }
 
     #[test]
