@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AccountStatus, LumiError, MediaInfo, Tool, ToolProgress, ToolStatus } from '../types'
+import type { AccountStatus, LumiError, MediaInfo, Tool, ToolProgress, ToolStatus, ToolUpdateReport } from '../types'
 
 // jsdom has no Web Animations API; Svelte transitions call element.animate and wait for onfinish.
 Element.prototype.animate ??= function () {
@@ -315,6 +315,35 @@ describe('App deno prompt', () => {
   })
 })
 
+describe('App update action', () => {
+  const broken: LumiError = { error: { code: 'extractor_broken' }, detail: 'Unable to extract' }
+
+  async function failOnce() {
+    vi.mocked(api.toolsStatus).mockResolvedValue([status('yt_dlp'), status('gallery_dl'), status('ffmpeg'), status('deno')])
+    vi.mocked(api.resolve).mockRejectedValue(broken)
+    render(App)
+    await waitFor(() => expect(get(toolStatuses)).not.toBeNull())
+    await fireEvent.input(screen.getByRole('textbox'), { target: { value: 'https://www.tiktok.com/@a/video/1' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Get links' }))
+    await screen.findByText('This site just changed, try updating the tools.')
+  }
+
+  it('updates the tools, then reads the link again', async () => {
+    await failOnce()
+    vi.mocked(api.updateTools).mockResolvedValue({ statuses: [status('yt_dlp', true, '2026.1.1')], errors: [] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(api.resolve).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows why the update failed instead of retrying', async () => {
+    await failOnce()
+    vi.mocked(api.updateTools).mockResolvedValue({ statuses: [status('yt_dlp')], errors: [{ tool: 'yt_dlp', error: network }] })
+    await fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+    await screen.findByText('No network connection.')
+    expect(api.resolve).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('App startup', () => {
   it('cannot read a link until the tool check is done, and setup leaves nothing stale', async () => {
     const check = deferred<ToolStatus[]>()
@@ -443,7 +472,7 @@ describe('SettingsPanel', () => {
   })
 
   it('lists tool versions and updates them', async () => {
-    const update = deferred<ToolStatus[]>()
+    const update = deferred<ToolUpdateReport>()
     vi.mocked(api.updateTools).mockReturnValue(update.promise)
     render(SettingsPanel, { onclose: vi.fn() })
     await screen.findByText('2025.10.22')
@@ -455,10 +484,29 @@ describe('SettingsPanel', () => {
     await fireEvent.click(btn)
     expect(btn.disabled).toBe(true)
     expect(btn.querySelector('.spinner')).toBeTruthy()
-    update.resolve([status('yt_dlp', true, '2025.11.01'), status('gallery_dl', true, '1.31.0'), status('ffmpeg', false), status('deno', true, 'deno 2.2.0')])
+    update.resolve({
+      statuses: [status('yt_dlp', true, '2025.11.01'), status('gallery_dl', true, '1.31.0'), status('ffmpeg', false), status('deno', true, 'deno 2.2.0')],
+      errors: [],
+    })
     await screen.findByText('2025.11.01')
     expect(btn.disabled).toBe(false)
+    expect(screen.getByText('Updated')).toBeTruthy()
     expect(get(toolStatuses)?.find((s) => s.tool === 'yt_dlp')?.version).toBe('2025.11.01')
+  })
+
+  it('reports the tool that failed while the others still update', async () => {
+    vi.mocked(api.updateTools).mockResolvedValue({
+      statuses: [status('yt_dlp', true, '2025.10.22'), status('gallery_dl', true, '1.31.0'), status('ffmpeg', false), status('deno', true, 'deno 2.1.4')],
+      errors: [{ tool: 'yt_dlp', error: network }],
+    })
+    const { container } = render(SettingsPanel, { onclose: vi.fn() })
+    await screen.findByText('1.30.10')
+    await fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+    await screen.findByText('1.31.0')
+    const err = container.querySelector('[data-tool="yt_dlp"]') as HTMLElement
+    expect(within(err).getByText('yt-dlp')).toBeTruthy()
+    expect(within(err).getByText('No network connection.')).toBeTruthy()
+    expect(screen.queryByText('Updated')).toBeNull()
   })
 
   it('shows a failed update inline', async () => {

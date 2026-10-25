@@ -24,7 +24,8 @@
 
   let updating = $state(false)
   let updated = $state(false)
-  let updateError = $state<LumiError | null>(null)
+  /** Why the last Update failed, per tool (null = the whole call failed); the other tools were updated. */
+  let updateErrors = $state<{ tool: Tool | null; error: LumiError }[]>([])
   let updatedTimer: ReturnType<typeof setTimeout> | undefined
 
   /** `deno 2.1.4 (stable, …)` → `2.1.4`: the name is already in the row and the build notes are noise. */
@@ -56,14 +57,18 @@
     if (updating) return
     updating = true
     updated = false
-    updateError = null
+    updateErrors = []
     clearTimeout(updatedTimer)
     try {
-      toolStatuses.set(await api.updateTools())
-      updated = true
-      updatedTimer = setTimeout(() => (updated = false), 2500)
+      const report = await api.updateTools()
+      toolStatuses.set(report.statuses)
+      updateErrors = report.errors
+      if (report.errors.length === 0) {
+        updated = true
+        updatedTimer = setTimeout(() => (updated = false), 2500)
+      }
     } catch (e) {
-      updateError = api.normalize(e)
+      updateErrors = [{ tool: null, error: api.normalize(e) }]
     } finally {
       updating = false
     }
@@ -179,11 +184,12 @@
           </div>
         {/each}
       </div>
-      {#if updateError}
-        <div class="item-error">
-          <ErrorBanner error={updateError} compact onaction={onUpdateError} />
+      {#each updateErrors as { tool, error }, i (i)}
+        <div class="item-error" data-tool={tool}>
+          {#if tool}<span class="err-tool">{toolName(tool)}</span>{/if}
+          <ErrorBanner {error} compact onaction={onUpdateError} />
         </div>
-      {/if}
+      {/each}
     </section>
 
     <section>
@@ -327,8 +333,16 @@
   .item-error {
     padding: 0 10px 10px;
   }
-  .group + .item-error {
+  .group + .item-error,
+  .item-error + .item-error {
     padding: 8px 0 0;
+  }
+  .err-tool {
+    display: block;
+    margin: 0 0 4px 2px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--muted);
   }
   .logo {
     display: grid;

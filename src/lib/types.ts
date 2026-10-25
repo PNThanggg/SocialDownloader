@@ -62,6 +62,12 @@ export interface ToolStatus {
   version: string | null;
 }
 
+/** What "Update" did: every tool's status afterwards, plus the tools that could not be updated. */
+export interface ToolUpdateReport {
+  statuses: ToolStatus[];
+  errors: { tool: Tool; error: LumiError }[];
+}
+
 export interface ToolProgress {
   tool: Tool;
   downloaded: number;

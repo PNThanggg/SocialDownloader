@@ -4,6 +4,8 @@ pub mod install;
 pub mod paths;
 pub mod runner;
 
+use std::ffi::OsString;
+
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
@@ -113,31 +115,59 @@ async fn install_emitting(app: &AppHandle, tool: Tool) -> Result<(), LumiError> 
     install::install_with(tool, &mut emit).await
 }
 
-async fn self_update(t: Tool, flag: &str) -> Result<(), LumiError> {
-    let out = run_tool(t, &[flag.into()]).await?;
+/// One tool whose update failed.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolUpdateError {
+    pub tool: Tool,
+    pub error: LumiError,
+}
+
+/// What "Update" did: every tool's status afterwards, plus the tools that could not be updated.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateReport {
+    pub statuses: Vec<ToolStatus>,
+    pub errors: Vec<ToolUpdateError>,
+}
+
+/// The self-update flags; ffmpeg and deno have none (they are fetched on demand, with a size prompt).
+fn self_update_args(t: Tool) -> Option<[&'static str; 2]> {
+    match t {
+        Tool::YtDlp => Some(["--ignore-config", "-U"]),
+        Tool::GalleryDl => Some(["--config-ignore", "--update"]),
+        Tool::Ffmpeg | Tool::Deno => None,
+    }
+}
+
+async fn self_update(t: Tool, args: [&str; 2]) -> Result<(), LumiError> {
+    let out = run_tool(t, &args.map(OsString::from)).await?;
     if out.status != 0 {
-        return Err(LumiError::new(classify(Site::Other, &out.stderr), out.stderr));
+        let detail = if out.stderr.trim().is_empty() { out.stdout } else { out.stderr };
+        return Err(LumiError::new(classify(Site::Other, &detail), detail));
     }
     Ok(())
 }
 
-#[tauri::command]
-pub async fn update_tools(
-    app: AppHandle,
-    state: State<'_, ToolsState>,
-) -> Result<Vec<ToolStatus>, LumiError> {
+/// Self-updates the installed yt-dlp and gallery-dl, carrying on past a failure.
+async fn update_all(state: &ToolsState) -> UpdateReport {
+    let mut errors = Vec::new();
     for t in Tool::ALL {
+        let Some(args) = self_update_args(t) else { continue };
         if !tool_path(t).exists() {
             continue;
         }
         let _guard = state.lock_for(t).lock().await;
-        match t {
-            Tool::YtDlp => self_update(t, "-U").await?,
-            Tool::GalleryDl => self_update(t, "--update").await?,
-            Tool::Ffmpeg | Tool::Deno => install_emitting(&app, t).await?,
+        if let Err(error) = self_update(t, args).await {
+            errors.push(ToolUpdateError { tool: t, error });
         }
     }
-    Ok(statuses().await)
+    UpdateReport { statuses: statuses().await, errors }
+}
+
+#[tauri::command]
+pub async fn update_tools(state: State<'_, ToolsState>) -> Result<UpdateReport, LumiError> {
+    Ok(update_all(&state).await)
 }
 
 #[cfg(test)]
@@ -156,6 +186,38 @@ mod tests {
             Some("deno 2.1.4 (stable)".into())
         );
         assert_eq!(parse_version(Tool::YtDlp, ""), None);
+    }
+
+    /// Update touches only yt-dlp and gallery-dl, keeps going after one fails, and reports it.
+    #[tokio::test]
+    async fn update_self_updates_and_reports_per_tool() {
+        let _g = paths::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("LUMI_BIN_DIR", dir.path()) };
+        let log = |n: &str| dir.path().join(format!("{n}.log"));
+        let fake = |n: &str, body: &str| {
+            let script = format!("@echo off\r\necho %*>> \"{}\"\r\n{body}\r\n", log(n).display());
+            std::fs::write(dir.path().join(format!("{n}.cmd")), script).unwrap();
+        };
+        // spawn_tool may prepend --ffmpeg-location, so look for -U anywhere in the arguments.
+        fake("yt-dlp", "echo %* | findstr /C:\" -U\" >nul && (echo ERROR: Unable to update 1>&2 & exit /b 1)\r\necho 2026.10.21");
+        fake("gallery-dl", "echo 1.33.0");
+        fake("ffmpeg", "echo ffmpeg version 7.1 x");
+        let report = update_all(&ToolsState::default()).await;
+        let read = |n: &str| std::fs::read_to_string(log(n)).unwrap_or_default();
+        let (yt, gdl, ff) = (read("yt-dlp"), read("gallery-dl"), read("ffmpeg"));
+        unsafe { std::env::remove_var("LUMI_BIN_DIR") };
+        assert!(yt.contains("--ignore-config -U"), "{yt}");
+        assert!(gdl.contains("--config-ignore --update"), "gallery-dl still updated after yt-dlp failed: {gdl}");
+        assert!(!ff.contains("-U") && !ff.contains("update"), "ffmpeg is never re-downloaded: {ff}");
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].tool, Tool::YtDlp);
+        assert!(report.errors[0].error.detail.contains("Unable to update"));
+        assert_eq!(report.statuses.len(), 4);
+        assert!(!report.statuses.iter().find(|s| s.tool == Tool::Deno).unwrap().installed);
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v["errors"][0]["tool"], "yt_dlp");
+        assert_eq!(v["errors"][0]["error"]["error"]["code"], "unknown");
     }
 
     #[test]

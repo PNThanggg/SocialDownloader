@@ -171,7 +171,7 @@ export function demo(spec: string): Demo {
         tools_status: () => tools('ffmpeg'),
         accounts_status: () => accounts(true, false),
         connect_account: () => new Promise(() => {}),
-        update_tools: async () => (await sleep(4000), tools('ffmpeg')),
+        update_tools: async () => (await sleep(4000), { statuses: tools('ffmpeg'), errors: [] }),
       })
       return {
         url: tiktok.sourceUrl,

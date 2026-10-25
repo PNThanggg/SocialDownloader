@@ -9,6 +9,7 @@ import type {
   Tool,
   ToolProgress,
   ToolStatus,
+  ToolUpdateReport,
 } from './types'
 
 export function isLumiError(e: unknown): e is LumiError {
@@ -48,7 +49,8 @@ export const cancelJob = (jobId: string) => call<void>('cancel_job', { jobId })
 export const toolsStatus = () => call<ToolStatus[]>('tools_status')
 export const installTool = (tool: Tool) => call<ToolStatus>('install_tool', { tool })
 export const toolDownloadSize = (tool: Tool) => call<number | null>('tool_download_size', { tool })
-export const updateTools = () => call<ToolStatus[]>('update_tools')
+/** Self-updates yt-dlp and gallery-dl; per-tool failures come back in `errors`, not as a throw. */
+export const updateTools = () => call<ToolUpdateReport>('update_tools')
 
 export const accountsStatus = () => call<AccountStatus[]>('accounts_status')
 export const connectAccount = (site: Site) => call<AccountStatus>('connect_account', { site })

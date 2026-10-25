@@ -93,9 +93,13 @@
         await refreshAccounts()
         return status.connected
       }
-      case 'update':
-        toolStatuses.set(await api.updateTools())
+      case 'update': {
+        const report = await api.updateTools()
+        toolStatuses.set(report.statuses)
+        // A tool that could not be updated: show why instead of retrying with the old one.
+        if (report.errors.length > 0) throw report.errors[0].error
         return true
+      }
       case 'reinstall':
         if (e.code !== 'tool_missing') return false
         await installWithProgress(e.tool)
