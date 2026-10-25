@@ -66,6 +66,14 @@ pub fn needs_ffmpeg(info: &MediaInfo, opt: &OptionId) -> bool {
     }
 }
 
+/// `-f` for a Video row. Only a video-only (NoAudio) row merges, since only it is gated on ffmpeg;
+/// a combined row takes `b` so it never needs a merge. Height 0 = unknown: a `[height<=0]` filter
+/// fails on the missing field, so there is no height filter at all.
+fn video_selector(height: u32, merge: bool) -> String {
+    let h = if height > 0 { format!("[height<={height}]") } else { String::new() };
+    if merge { format!("bv*{h}+ba[format_id!=audio]/b{h}") } else { format!("b{h}") }
+}
+
 fn tag_args(title: &str, artist: &str) -> Vec<OsString> {
     vec![
         "-metadata".into(),
@@ -84,7 +92,7 @@ fn ytdlp_plan(
         OptionId::Video { height, .. } => {
             a.extend(os(&[
                 "-f",
-                &format!("bv*[height<={height}]+ba[format_id!=audio]/b[height<={height}]"),
+                &video_selector(*height, needs_ffmpeg(info, opt)),
                 "-S",
                 "ext:mp4:m4a",
                 "--merge-output-format",
@@ -269,19 +277,32 @@ mod tests {
 
     #[test]
     fn plan_video_selectors_and_metadata() {
+        // A combined row never merges (no ffmpeg needed): `b` only.
         let tiktok = info(Site::Tiktok, Engine::YtDlp, 1, vec![opt("0/video:1080", OptionKind::Video, None)]);
         let a = ytdlp_args(&build_plan(&tiktok, &OptionId::Video { item: 0, height: 1080 }, &dest(), &tmp(), None).unwrap());
-        let f = after(&a, "-f");
-        assert!(f.contains("ba[format_id!=audio]"), "{f}");
-        assert_eq!(f, "bv*[height<=1080]+ba[format_id!=audio]/b[height<=1080]");
+        assert_eq!(after(&a, "-f"), "b[height<=1080]");
         assert!(!a.contains(&"--embed-metadata".to_string()));
         assert!(a.contains(&"--force-overwrites".to_string()));
         assert_eq!(after(&a, "--merge-output-format"), "mp4");
         assert!(after(&a, "--progress-template").starts_with("download:LUMI|"));
 
+        // A video-only row merges with the best audio (it already requires ffmpeg).
         let yt = info(Site::Youtube, Engine::YtDlp, 1, vec![opt("0/video:1080", OptionKind::Video, Some(OptionNote::NoAudio))]);
         let a = ytdlp_args(&build_plan(&yt, &OptionId::Video { item: 0, height: 1080 }, &dest(), &tmp(), None).unwrap());
+        assert_eq!(after(&a, "-f"), "bv*[height<=1080]+ba[format_id!=audio]/b[height<=1080]");
         assert!(a.contains(&"--embed-metadata".to_string()));
+    }
+
+    /// Unknown height (Facebook): a `[height<=0]` filter fails on the missing field, so none at all.
+    #[test]
+    fn plan_video_unknown_height_has_no_height_filter() {
+        let fb = info(Site::Facebook, Engine::YtDlp, 1, vec![opt("0/video:0", OptionKind::Video, None)]);
+        let a = ytdlp_args(&build_plan(&fb, &OptionId::parse("0/video:0").unwrap(), &dest(), &tmp(), None).unwrap());
+        assert_eq!(after(&a, "-f"), "b");
+        let noaudio = info(Site::Other, Engine::YtDlp, 1, vec![opt("0/video:0", OptionKind::Video, Some(OptionNote::NoAudio))]);
+        let a = ytdlp_args(&build_plan(&noaudio, &OptionId::Video { item: 0, height: 0 }, &dest(), &tmp(), None).unwrap());
+        assert_eq!(after(&a, "-f"), "bv*+ba[format_id!=audio]/b");
+        assert!(!a.iter().any(|x| x.contains("height<=")));
     }
 
     #[test]
