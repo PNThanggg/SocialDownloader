@@ -39,7 +39,15 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 windows = { version = "0.62.2", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_Memory", "Wdk_System_SystemServices", "Win32_System_SystemInformation"] }
 futures-util = "0.3.34"
 base64 = "0.23.1"
+tauri-plugin-single-instance = "2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
 cookie = "0.18.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true
+panic = "abort"

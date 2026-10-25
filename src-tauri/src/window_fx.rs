@@ -37,9 +37,9 @@ fn try_effect(window: &WebviewWindow, effect: Effect) -> bool {
         .is_ok()
 }
 
-/// Apply Mica (Windows 11) or Acrylic, falling back to "none".
+/// Apply dark Mica (Windows 11; stays dark on light system themes) or Acrylic, falling back to "none".
 pub fn apply(window: &WebviewWindow) -> &'static str {
-    let result = if windows_build() >= 22000 && try_effect(window, Effect::Mica) {
+    let result = if windows_build() >= 22000 && try_effect(window, Effect::MicaDark) {
         "mica"
     } else if try_effect(window, Effect::Acrylic) {
         "acrylic"
