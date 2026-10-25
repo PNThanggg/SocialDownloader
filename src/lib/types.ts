@@ -36,3 +36,53 @@ export interface MediaInfo {
   items: MediaItem[];
   limitedFormats: boolean;
 }
+
+export type Tool = 'yt_dlp' | 'gallery_dl' | 'ffmpeg' | 'deno';
+
+export type ErrorCode =
+  | { code: 'unsupported_url' }
+  | { code: 'login_required'; site: Site }
+  | { code: 'private_or_removed' }
+  | { code: 'extractor_broken' }
+  | { code: 'network' }
+  | { code: 'rate_limited' }
+  | { code: 'youtube_bot_check' }
+  | { code: 'playlist_not_supported' }
+  | { code: 'tool_missing'; tool: Tool }
+  | { code: 'unknown' };
+
+export interface LumiError {
+  error: ErrorCode;
+  detail: string;
+}
+
+export interface ToolStatus {
+  tool: Tool;
+  installed: boolean;
+  version: string | null;
+}
+
+export interface ToolProgress {
+  tool: Tool;
+  downloaded: number;
+  total: number | null;
+}
+
+export interface AccountStatus {
+  site: Site;
+  connected: boolean;
+}
+
+export type JobState =
+  | { state: 'started' }
+  | { state: 'progress'; fraction: number | null }
+  | { state: 'postprocessing' }
+  | { state: 'done'; path: string }
+  | { state: 'failed'; error: LumiError }
+  | { state: 'cancelled' };
+
+export type JobEvent = {
+  jobId: string;
+  url: string;
+  optionId: string;
+} & JobState;

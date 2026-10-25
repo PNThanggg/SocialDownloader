@@ -1,0 +1,80 @@
+import { derived, writable, type Readable, type Writable } from 'svelte/store'
+import type { ErrorCode, Site, Tool } from '../types'
+import { en } from './en'
+import { readLanguage, writeLanguage, type Language } from './settings'
+import { vi, type MessageKey } from './vi'
+
+export type { MessageKey } from './vi'
+export type { Language } from './settings'
+export type Locale = 'vi' | 'en'
+
+const messages: Record<Locale, Record<MessageKey, string>> = { vi, en }
+
+const SITE_NAMES: Record<Site, string> = {
+  tiktok: 'TikTok',
+  instagram: 'Instagram',
+  youtube: 'YouTube',
+  facebook: 'Facebook',
+  other: 'Other',
+}
+
+const TOOL_NAMES: Record<Tool, string> = {
+  yt_dlp: 'yt-dlp',
+  gallery_dl: 'gallery-dl',
+  ffmpeg: 'ffmpeg',
+  deno: 'deno',
+}
+
+export function detectLocale(nav: string): Locale {
+  return nav.toLowerCase().startsWith('vi') ? 'vi' : 'en'
+}
+
+/** The user's choice; 'auto' follows the system language. */
+export const language: Writable<Language> = writable('auto')
+
+export const locale: Readable<Locale> = derived(language, ($l) =>
+  $l === 'auto' ? detectLocale(typeof navigator === 'undefined' ? 'en' : navigator.language) : $l,
+)
+
+export async function initLanguage(): Promise<void> {
+  language.set(await readLanguage())
+}
+
+export async function setLanguage(lang: Language): Promise<void> {
+  language.set(lang)
+  await writeLanguage(lang)
+}
+
+function display(name: string, value: string): string {
+  if (name === 'site') return SITE_NAMES[value as Site] ?? value
+  if (name === 'tool') return TOOL_NAMES[value as Tool] ?? value
+  return value
+}
+
+export type Translate = (key: MessageKey, params?: Record<string, string>) => string
+
+export const t: Readable<Translate> = derived(locale, ($locale): Translate => (key, params) =>
+  messages[$locale][key].replace(/\{(\w+)\}/g, (m: string, name: string) =>
+    params && name in params ? display(name, params[name]) : m,
+  ),
+)
+
+export type ErrorAction = 'connect' | 'reconnect' | 'update' | 'retry' | 'details' | 'reinstall'
+
+export function errorMessage(e: ErrorCode, connected: boolean): { key: MessageKey; action?: ErrorAction } {
+  const key = `err.${e.code}` as const
+  switch (e.code) {
+    case 'login_required':
+      return { key, action: connected ? 'reconnect' : 'connect' }
+    case 'extractor_broken':
+      return { key, action: 'update' }
+    case 'network':
+      return { key, action: 'retry' }
+    case 'unknown':
+      return { key, action: 'details' }
+    case 'tool_missing':
+      return { key, action: 'reinstall' }
+    default:
+      return { key }
+  }
+}

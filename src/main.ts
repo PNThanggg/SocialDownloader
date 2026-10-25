@@ -2,7 +2,13 @@ import { mount } from 'svelte'
 import { invoke } from '@tauri-apps/api/core'
 import './styles/glass.css'
 import App from './App.svelte'
+import { initLanguage } from './lib/i18n'
 
+const app = mount(App, {
+  target: document.getElementById('app')!,
+})
+
+// After mount, so a slow or failing backend call never blocks first paint.
 async function applyWindowEffect() {
   let fx = 'none'
   try {
@@ -13,10 +19,7 @@ async function applyWindowEffect() {
   document.documentElement.classList.add(`fx-${fx}`)
 }
 
-await applyWindowEffect()
-
-const app = mount(App, {
-  target: document.getElementById('app')!,
-})
+void applyWindowEffect()
+void initLanguage()
 
 export default app
