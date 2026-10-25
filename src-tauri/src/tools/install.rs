@@ -31,7 +31,7 @@ fn source(t: Tool) -> Source {
             checksum_name: "yt-dlp.exe",
         },
         Tool::GalleryDl => Source {
-            url: "https://github.com/mikf/gallery-dl/releases/latest/download/gallery-dl.exe".into(),
+            url: "https://github.com/gdl-org/builds/releases/latest/download/gallery-dl_windows.exe".into(),
             checksum_url: None,
             checksum_name: "gallery-dl.exe",
         },
