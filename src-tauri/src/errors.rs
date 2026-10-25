@@ -47,7 +47,7 @@ static LOGIN: Lazy<Regex> = Lazy::new(|| {
     re(r"login required|log in|only available for registered users|AuthorizationError|cookies? .*required")
 });
 static PRIVATE: Lazy<Regex> = Lazy::new(|| {
-    re(r"private video|video unavailable|NotFoundError|has been removed|no longer available|not available")
+    re(r"private video|video unavailable|NotFoundError|has been removed|(?:video|content) (?:is )?(?:not|no longer) available")
 });
 static RATE_LIMIT: Lazy<Regex> = Lazy::new(|| re(r"\b429\b|too many requests"));
 static NETWORK: Lazy<Regex> = Lazy::new(|| {
@@ -100,6 +100,7 @@ mod tests {
             (Site::Other, "Failed to resolve 'example.com'", Network),
             (Site::Tiktok, "HTTP Error 429: Too Many Requests", RateLimited),
             (Site::Instagram, "[instagram][error] HttpError: '429 Too Many Requests'", RateLimited),
+            (Site::Youtube, "ERROR: [youtube] x: Requested format is not available", Unknown),
             (Site::Other, "something completely different", Unknown),
             (Site::Tiktok, "please report this issue ... login required", LoginRequired { site: Site::Tiktok }),
         ];
@@ -110,7 +111,11 @@ mod tests {
 
     #[test]
     fn lumi_error_converts_to_invoke_error() {
-        let _: tauri::ipc::InvokeError = LumiError::new(Unknown, "raw log").into();
+        let e = LumiError::new(Unknown, "raw log");
+        let expected = serde_json::json!({"error": {"code": "unknown"}, "detail": "raw log"});
+        assert_eq!(serde_json::to_value(&e).unwrap(), expected);
+        let inv: tauri::ipc::InvokeError = e.into();
+        assert_eq!(inv.0, expected);
     }
 
     #[test]
