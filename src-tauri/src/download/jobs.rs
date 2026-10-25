@@ -418,6 +418,52 @@ fn remove_stem_leftovers(dest: &Path, started: SystemTime) {
     }
 }
 
+/// "Download all" into `dest_dir`. Unfinished pieces go to the job's `tmp` (removed on cancel or
+/// failure), so only complete files ever land in the user's folder.
+fn download_all_plan(info: &MediaInfo, dest_dir: &Path, tmp: &Path, cookies: Option<&Path>) -> Plan {
+    match info.engine {
+        Engine::GalleryDl => {
+            let mut a: Vec<OsString> = vec!["-D".into(), dest_dir.into()];
+            // A root-level option: gallery-dl's downloaders look it up before their own sections.
+            let mut part_dir = OsString::from("part-directory=");
+            part_dir.push(tmp);
+            a.extend(["-o".into(), part_dir]);
+            if let Some(c) = cookies {
+                a.extend(["--cookies".into(), c.into()]);
+            }
+            a.push((&info.source_url).into());
+            Plan::GalleryDl(a)
+        }
+        Engine::YtDlp => {
+            // yt-dlp ignores `-P temp:` when `-o` is absolute: a relative template plus `-P home:`.
+            let mut home = OsString::from("home:");
+            home.push(dest_dir);
+            let mut temp = OsString::from("temp:");
+            temp.push(tmp);
+            let mut a = ytdlp_common_args();
+            a.extend([
+                "-P".into(),
+                home,
+                "-P".into(),
+                temp,
+                "-o".into(),
+                "%(title).80B [%(id)s].%(ext)s".into(),
+                "-f".into(),
+                "bv*+ba[format_id!=audio]/b".into(),
+                "--force-overwrites".into(),
+                "--newline".into(),
+                "--progress-template".into(),
+                PROGRESS_TEMPLATE.into(),
+            ]);
+            if let Some(c) = cookies {
+                a.extend(["--cookies".into(), c.into()]);
+            }
+            a.push((&info.source_url).into());
+            Plan::YtDlp(a)
+        }
+    }
+}
+
 /// Removes the job tmp dir; the dying child may still hold files for a moment.
 async fn remove_tmp(dir: &Path) {
     for _ in 0..20 {
@@ -503,36 +549,7 @@ impl JobManager {
         let tmp = tmp_dir().join(&job_id);
         let cookies = cookie_file_for(info.site)?;
         let cookie_path = cookies.as_ref().map(|c| c.0.as_path());
-        let plan = match info.engine {
-            Engine::GalleryDl => {
-                let mut a: Vec<OsString> = vec!["-D".into(), dest_dir.as_os_str().into()];
-                if let Some(c) = cookie_path {
-                    a.extend(["--cookies".into(), c.into()]);
-                }
-                a.push((&info.source_url).into());
-                Plan::GalleryDl(a)
-            }
-            Engine::YtDlp => {
-                let dir = dest_dir.to_string_lossy().replace('%', "%%");
-                let dir = dir.trim_end_matches(['\\', '/']);
-                let mut a = ytdlp_common_args();
-                a.extend([
-                    "-o".into(),
-                    format!("{dir}\\%(title).80B [%(id)s].%(ext)s").into(),
-                    "-f".into(),
-                    "bv*+ba[format_id!=audio]/b".into(),
-                    "--force-overwrites".into(),
-                    "--newline".into(),
-                    "--progress-template".into(),
-                    PROGRESS_TEMPLATE.into(),
-                ]);
-                if let Some(c) = cookie_path {
-                    a.extend(["--cookies".into(), c.into()]);
-                }
-                a.push((&info.source_url).into());
-                Plan::YtDlp(a)
-            }
-        };
+        let plan = download_all_plan(&info, &dest_dir, &tmp, cookie_path);
         let spec = JobSpec {
             job_id,
             url,
@@ -970,6 +987,37 @@ mod tests {
         wait_until("final event", || sink.is_final()).await;
         let args = std::fs::read_to_string(out.join("args.txt")).unwrap();
         assert!(args.contains("bv*+ba[format_id!=audio]/b") && args.contains("--newline") && args.contains("--progress-template"), "{args}");
+        assert!(args.contains(&format!("temp:{}", env.tmp.path().display())) && args.contains(&format!("home:{}", out.display())), "{args}");
+    }
+
+    fn plan_strings(p: &Plan) -> Vec<String> {
+        match p {
+            Plan::YtDlp(a) | Plan::GalleryDl(a) => a.iter().map(|s| s.to_string_lossy().into_owned()).collect(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn has_pair(a: &[String], flag: &str, value: &str) -> bool {
+        a.windows(2).any(|w| w[0] == flag && w[1] == value)
+    }
+
+    /// Partials of "Download all" stay in the job tmp dir, never in the user's folder.
+    #[test]
+    fn download_all_plans_keep_partials_in_tmp() {
+        let mut info = seeded_cache().get(URL).unwrap();
+        let (dir, tmp) = (PathBuf::from(r"D:\50% off"), PathBuf::from(r"C:\tmp\job"));
+        let a = plan_strings(&download_all_plan(&info, &dir, &tmp, None));
+        assert!(has_pair(&a, "-P", r"home:D:\50% off"), "{a:?}");
+        assert!(has_pair(&a, "-P", r"temp:C:\tmp\job"), "{a:?}");
+        assert!(has_pair(&a, "-o", "%(title).80B [%(id)s].%(ext)s"), "relative, or yt-dlp ignores -P temp: {a:?}");
+        assert_eq!(a.last().unwrap(), URL);
+
+        info.engine = Engine::GalleryDl;
+        let a = plan_strings(&download_all_plan(&info, &dir, &tmp, Some(Path::new(r"C:\c.txt"))));
+        assert!(has_pair(&a, "-D", r"D:\50% off"), "{a:?}");
+        assert!(has_pair(&a, "-o", r"part-directory=C:\tmp\job"), "{a:?}");
+        assert!(has_pair(&a, "--cookies", r"C:\c.txt"), "{a:?}");
+        assert_eq!(a.last().unwrap(), URL);
     }
 
     #[test]
@@ -1003,6 +1051,7 @@ mod tests {
         assert_eq!(sink.events().first().unwrap().option_id, "all");
         let args = std::fs::read_to_string(out.join("args.txt")).unwrap();
         assert!(args.contains("-D") && args.contains(&*out.to_string_lossy()) && args.contains(URL), "{args}");
+        assert!(args.contains(&format!("part-directory={}", env.tmp.path().display())), "{args}");
     }
 
     /// Real tools, real TikTok. `cargo test live_download_tiktok_mp3 -- --ignored --nocapture`
