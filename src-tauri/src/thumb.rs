@@ -26,13 +26,17 @@ fn too_large() -> LumiError {
     LumiError::new(ErrorCode::Unknown, "thumbnail larger than 5MB")
 }
 
-async fn fetch(url: &str, referer: Option<&str>) -> Result<String, LumiError> {
-    let client = reqwest::Client::builder()
+/// Desktop-Chrome client with the app's standard timeouts; follows redirects.
+pub(crate) fn browser_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30))
         .build()
-        .map_err(net_err)?;
+}
+
+async fn fetch(url: &str, referer: Option<&str>) -> Result<String, LumiError> {
+    let client = browser_client().map_err(net_err)?;
     let mut req = client.get(url);
     if let Some(r) = referer {
         req = req.header(reqwest::header::REFERER, r);
