@@ -39,12 +39,20 @@ pub fn ytdlp_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
     args
 }
 
-fn item_from(index: u32, info: &YtInfo, has_deno: bool) -> MediaItem {
+fn item_from(site: Site, index: u32, info: &YtInfo, has_deno: bool) -> MediaItem {
+    // TikTok's format_id "audio" is the original-sound/music track, not the video's own audio.
+    let formats: Vec<YtFormat> = info
+        .formats
+        .iter()
+        .flatten()
+        .filter(|f| !(site == Site::Tiktok && f.format_id.as_deref() == Some("audio")))
+        .cloned()
+        .collect();
     MediaItem {
         index,
         thumbnail: info.thumbnail.clone(),
         is_video: true,
-        options: group_formats(index, info.formats.as_deref().unwrap_or(&[]), has_deno),
+        options: group_formats(index, &formats, has_deno),
     }
 }
 
@@ -63,10 +71,10 @@ pub fn parse_ytdlp_json(site: Site, json: &str, has_deno: bool) -> Result<MediaI
             .flatten()
             .flatten()
             .enumerate()
-            .map(|(i, e)| item_from(i as u32, e, has_deno))
+            .map(|(i, e)| item_from(site, i as u32, e, has_deno))
             .collect()
     } else {
-        vec![item_from(0, &info, has_deno)]
+        vec![item_from(site, 0, &info, has_deno)]
     };
 
     let thumbnail = info.thumbnail.clone().or_else(|| items.first().and_then(|i| i.thumbnail.clone()));
@@ -109,8 +117,11 @@ mod tests {
         let opts = &info.items[0].options;
         assert!(!videos(opts).is_empty());
         assert_eq!(audio(opts).len(), 1);
-        // The real TikTok dump carries a separate music-only "audio" format.
-        assert_eq!(audio(opts)[0].note, Some(OptionNote::SourceAudio { ext: "mp3".into() }));
+        // The music-only "audio" format is excluded, so MP3 comes from the video itself.
+        assert_eq!(audio(opts)[0].note, Some(OptionNote::SourceIsVideo));
+        let best_combined = videos(opts).last().unwrap().direct_url.clone();
+        assert!(best_combined.is_some());
+        assert_eq!(audio(opts)[0].direct_url, best_combined);
         assert!(info.title.starts_with("Scramble up ur name"));
         assert_eq!(info.author.as_deref(), Some("scout2015"));
         assert_eq!(info.engine, crate::model::Engine::YtDlp);
@@ -146,6 +157,17 @@ mod tests {
         assert_eq!(a[0].label, "MP3");
         assert_eq!(a[0].ext, "mp3");
         assert_eq!(a[0].direct_url.as_deref(), Some("https://x/a.mp4"));
+    }
+
+    #[test]
+    fn audio_format_id_filter_is_tiktok_only() {
+        let json = r#"{"id":"1","title":"t","formats":[
+            {"format_id":"audio","url":"https://x/a.mp3","ext":"mp3","vcodec":"none","acodec":"mp3","protocol":"https"},
+            {"format_id":"v","url":"https://x/v.mp4","ext":"mp4","height":720,"width":1280,"vcodec":"avc1","acodec":"none","protocol":"https"}]}"#;
+        let other = parse_ytdlp_json(Site::Other, json, false).unwrap();
+        assert_eq!(audio(&other.items[0].options)[0].note, Some(OptionNote::SourceAudio { ext: "mp3".into() }));
+        let tt = parse_ytdlp_json(Site::Tiktok, json, false).unwrap();
+        assert!(audio(&tt.items[0].options).is_empty());
     }
 
     #[test]

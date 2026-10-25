@@ -16,6 +16,7 @@ pub struct YtFormat {
     pub format_id: Option<String>,
     pub url: Option<String>,
     pub ext: Option<String>,
+    pub audio_ext: Option<String>,
     pub width: Option<f64>,
     pub height: Option<f64>,
     pub vcodec: Option<String>,
@@ -167,7 +168,12 @@ pub fn group_formats(item: u32, formats: &[YtFormat], _has_deno: bool) -> Vec<Me
             ext: "mp3".into(),
             filesize: a.size(),
             direct_url: a.direct_url(),
-            note: Some(OptionNote::SourceAudio { ext: a.ext.clone().unwrap_or_default() }),
+            note: a
+                .ext
+                .clone()
+                .or_else(|| a.audio_ext.clone())
+                .filter(|e| !e.is_empty() && e != "none")
+                .map(|ext| OptionNote::SourceAudio { ext }),
         });
     } else if let Some(c) = best_combined {
         out.push(MediaOption {
