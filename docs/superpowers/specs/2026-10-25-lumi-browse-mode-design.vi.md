@@ -34,7 +34,7 @@ Người dùng chọn làm kiểu A trước, kèm tài liệu này để sau n�
 ## 4. Cửa sổ lướt
 
 - Một `WebviewWindow` Tauri mới, tải `https://www.instagram.com/` hoặc `https://www.facebook.com/`.
-- Dùng **chung thư mục dữ liệu WebView** với cửa sổ đăng nhập ở bản A (§7), nên không phải đăng nhập lại **[Claude]**.
+- Dùng **profile WebView của đúng trang đó**, chung với cửa sổ đăng nhập trang đó ở bản A (§7): `%LOCALAPPDATA%\Lumi\webdata\accounts\<site>`, lấy từ `webdata_dir_for(site)`. Nhờ vậy không phải đăng nhập lại, và Instagram với Facebook không bao giờ dùng chung profile **[Claude]**.
 - Có thanh trên mỏng theo phong cách kính mờ, gồm: Back / Forward / Reload, ô hiển thị URL (chỉ đọc), nút **Tải bài đang mở** (phương án dự phòng ở §5.3).
   - *Gợi ý cách làm:* thanh này là một webview giao diện Lumi riêng. Nếu muốn ghép chung cửa sổ thì dùng tính năng multi-webview của Tauri (đang `unstable`). Cách đơn giản hơn là thanh công cụ nằm trong cửa sổ riêng gắn liền phía trên. Người làm tự chọn.
 - Chỉ cho điều hướng trong các domain `instagram.com`, `facebook.com`, `fbcdn.net`, `cdninstagram.com` và các domain đăng nhập/2FA liên quan. Link ra ngoài thì mở bằng trình duyệt mặc định **[Claude]**.
@@ -76,10 +76,10 @@ Cách làm đề xuất:
 
 - `resolve(url) -> MediaInfo`
 - `download(url, option_id, dest_path)`
-- module `accounts` (thư mục dữ liệu WebView, file cookie mã hóa DPAPI)
+- module `accounts` (profile WebView theo từng trang qua `webdata_dir_for(site)`, file cookie mã hóa DPAPI)
 - component khung kết quả và bảng lỗi
 
-Cookie: vì cửa sổ lướt dùng chung thư mục dữ liệu WebView, cookie trong lúc lướt có thể được làm mới. **[Claude]** Mỗi lần mở popup thì đọc lại cookie từ WebView và ghi đè file cookie, để yt-dlp/gallery-dl luôn dùng phiên mới nhất.
+Cookie: vì cửa sổ lướt dùng chung profile WebView của trang đó với cửa sổ đăng nhập trang đó, cookie trong lúc lướt có thể được làm mới. **[Claude]** Mỗi lần mở popup thì đọc lại cookie từ WebView và ghi đè file cookie, để yt-dlp/gallery-dl luôn dùng phiên mới nhất.
 
 ## 8. Thứ tự triển khai gợi ý
 

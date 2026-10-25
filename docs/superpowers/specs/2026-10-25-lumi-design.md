@@ -139,7 +139,7 @@ Flow:
 5. When reading an IG/FB link: if connected, pass `--cookies <file>` to yt-dlp and `--cookies <file>` to gallery-dl.
 6. **Sign out** = delete the cookie file + clear the login window's WebView data.
 
-**[Claude]** The login window uses a **separate WebView data directory** (Lumi's own data directory), isolated from the main UI webview. Mode B will reuse exactly this directory to keep the session.
+**[Claude]** Each site's login window uses its **own WebView data directory** (a per-site profile): `%LOCALAPPDATA%\Lumi\webdata\accounts\<site>` (`instagram`, `facebook`; `webdata_dir_for(site)` in the `accounts` module), isolated from the main UI webview and from the other site, so signing out of one site never clears the other's session. Mode B will reuse exactly that site's directory to keep the session.
 
 TikTok and YouTube need no sign-in in the first version **[Claude]**. Google blocks sign-in inside embedded WebViews, so in-app login can't work for YouTube. When YouTube demands "confirm you're not a bot", the app shows a clear error: "YouTube is asking to sign in, try again later or use another link". The first version has no workaround.
 
@@ -155,7 +155,7 @@ Mode B (browse IG/FB in the app, download straight from a post) will reuse mode 
 
 - A core Rust command: `resolve(url) -> MediaInfo` (metadata + list of options, each with id, kind, label, direct URL). It knows nothing about the UI.
 - A core command: `download(url, option_id, dest_path) -> progress stream`.
-- An `accounts` module managing the login window, the WebView data directory and the cookie file.
+- An `accounts` module managing the login window, the per-site WebView data directories and the cookie files.
 - The result UI (the result card in §4.2) is a standalone component that takes a `MediaInfo`. Mode B will show this same component inside a popup.
 
 Mode B details are in `2026-10-25-lumi-browse-mode-design.md`.

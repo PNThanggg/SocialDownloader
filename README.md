@@ -1,47 +1,38 @@
-# Svelte + TS + Vite
+# Lumi
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+A small Windows desktop app (Tauri 2 + Svelte 5) that downloads media from TikTok, Instagram,
+YouTube and Facebook: paste a link, pick MP4 / MP3 / image (or TikTok's original sound), save.
 
-## Recommended IDE Setup
+Lumi drives [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl),
+which it downloads on first launch into `%LOCALAPPDATA%\Lumi\bin`. ffmpeg (MP3 and merging video with
+sound) and deno (every YouTube quality) are downloaded the first time they are needed, after asking.
+Instagram and Facebook can be connected in Settings for posts that need signing in; their cookies are
+DPAPI-encrypted at rest.
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+The design lives in `docs/superpowers/specs/2026-10-25-lumi-design.md`.
 
-## Need an official Svelte framework?
+## Develop
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+Requirements: Node 20+, Rust (MSVC toolchain), WebView2.
 
-## Technical considerations
+```sh
+npm install
+npm run tauri dev          # run the app
+```
 
-**Why use this over SvelteKit?**
+## Test
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+```sh
+cd src-tauri && cargo test # Rust core (fake tools, no network)
+npx vitest run             # UI
+npm run check              # svelte-check + tsc
+```
 
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+Network tests that use the real tools are ignored by default:
+`cd src-tauri && cargo test -- --ignored --nocapture`.
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
+## Build
 
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```sh
+npm run tauri build        # NSIS installer in src-tauri/target/release/bundle/nsis/
 ```

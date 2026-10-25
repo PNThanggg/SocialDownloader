@@ -139,7 +139,7 @@ Luồng hoạt động:
 5. Khi đọc link IG/FB: nếu đã kết nối thì truyền `--cookies <file>` cho yt-dlp và `--cookies <file>` cho gallery-dl.
 6. **Đăng xuất** = xóa file cookie + xóa dữ liệu WebView của cửa sổ đăng nhập.
 
-**[Claude]** Cửa sổ đăng nhập dùng một **thư mục dữ liệu WebView riêng** (data directory riêng cho Lumi), tách khỏi webview giao diện chính. Kiểu B sẽ dùng lại đúng thư mục này để giữ đăng nhập.
+**[Claude]** Cửa sổ đăng nhập của mỗi trang dùng **thư mục dữ liệu WebView riêng của trang đó** (profile theo từng trang): `%LOCALAPPDATA%\Lumi\webdata\accounts\<site>` (`instagram`, `facebook`; hàm `webdata_dir_for(site)` trong module `accounts`), tách khỏi webview giao diện chính và khỏi trang còn lại, nên đăng xuất một trang không làm mất phiên của trang kia. Kiểu B sẽ dùng lại đúng thư mục của trang đó để giữ đăng nhập.
 
 TikTok và YouTube không cần đăng nhập ở bản đầu **[Claude]**. Google chặn đăng nhập trong WebView nhúng, nên không dùng được cách đăng nhập trong app cho YouTube. Khi YouTube đòi "xác nhận không phải bot", app báo lỗi rõ ràng: "YouTube đang yêu cầu đăng nhập, thử lại sau hoặc dùng link khác". Bản đầu không có cách vượt qua.
 
@@ -155,7 +155,7 @@ Kiểu B (lướt IG/FB trong app, bấm nút tải ngay trên bài) sẽ tái s
 
 - Một lệnh lõi trong Rust: `resolve(url) -> MediaInfo` (metadata + danh sách các lựa chọn, mỗi lựa chọn có id, loại, nhãn, link gốc). Lệnh này không biết gì về giao diện.
 - Một lệnh lõi: `download(url, option_id, dest_path) -> stream tiến trình`.
-- Một module `accounts` quản lý cửa sổ đăng nhập, thư mục dữ liệu WebView và file cookie.
+- Một module `accounts` quản lý cửa sổ đăng nhập, các thư mục dữ liệu WebView theo từng trang và các file cookie.
 - UI kết quả (khung kết quả ở §4.2) là một component độc lập, nhận `MediaInfo`. Kiểu B sẽ hiện chính component này trong một popup.
 
 Chi tiết kiểu B nằm ở `2026-10-25-lumi-browse-mode-design.vi.md`.

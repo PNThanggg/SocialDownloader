@@ -34,7 +34,7 @@ The user chose to build mode A first, with this spec ready so mode B can be impl
 ## 4. Browse window
 
 - A new Tauri `WebviewWindow` loading `https://www.instagram.com/` or `https://www.facebook.com/`.
-- Uses the **same WebView data directory** as mode A's login window (§7), so no re-login is needed **[Claude]**.
+- Uses that site's **per-site WebView profile**, the same one mode A's login window for that site uses (§7): `%LOCALAPPDATA%\Lumi\webdata\accounts\<site>`, from `webdata_dir_for(site)`. So no re-login is needed, and Instagram and Facebook never share a profile **[Claude]**.
 - A thin frosted-glass top bar with: Back / Forward / Reload, a read-only URL display, and a **Download this post** button (the fallback in §5.3).
   - *Implementation hint:* the bar is a separate Lumi UI webview. To combine it in one window, use Tauri's multi-webview feature (currently `unstable`). Simpler: put the toolbar in its own window attached above. The implementer chooses.
 - Only allow navigation within `instagram.com`, `facebook.com`, `fbcdn.net`, `cdninstagram.com` and the related login/2FA domains. External links open in the default browser **[Claude]**.
@@ -76,10 +76,10 @@ Proposed approach:
 
 - `resolve(url) -> MediaInfo`
 - `download(url, option_id, dest_path)`
-- the `accounts` module (WebView data directory, DPAPI-encrypted cookie file)
+- the `accounts` module (per-site WebView profiles via `webdata_dir_for(site)`, DPAPI-encrypted cookie files)
 - the result card component and the error table
 
-Cookies: since the browse window shares the WebView data directory, cookies may get refreshed while browsing. **[Claude]** Each time the popup opens, re-read cookies from the WebView and overwrite the cookie file, so yt-dlp/gallery-dl always use the latest session.
+Cookies: since the browse window shares its site's WebView profile with that site's login window, cookies may get refreshed while browsing. **[Claude]** Each time the popup opens, re-read cookies from the WebView and overwrite the cookie file, so yt-dlp/gallery-dl always use the latest session.
 
 ## 8. Suggested implementation order
 
