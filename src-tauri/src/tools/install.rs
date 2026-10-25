@@ -54,18 +54,43 @@ fn net_err(e: impl std::fmt::Display) -> LumiError {
     LumiError::new(ErrorCode::Network, e.to_string())
 }
 
+/// reqwest hides the root cause behind its Display; include the whole chain.
+fn req_err(e: reqwest::Error) -> LumiError {
+    let mut msg = e.to_string();
+    let mut src = std::error::Error::source(&e);
+    while let Some(s) = src {
+        msg.push_str(": ");
+        msg.push_str(&s.to_string());
+        src = s.source();
+    }
+    net_err(msg)
+}
+
 fn io_err(e: impl std::fmt::Display) -> LumiError {
     LumiError::new(ErrorCode::Unknown, e.to_string())
 }
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Max silence between received chunks; there is deliberately no total timeout.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn client() -> Result<reqwest::Client, LumiError> {
-    reqwest::Client::builder().user_agent("Lumi").build().map_err(net_err)
+    client_with(READ_TIMEOUT)
+}
+
+fn client_with(read_timeout: Duration) -> Result<reqwest::Client, LumiError> {
+    reqwest::Client::builder()
+        .user_agent("Lumi")
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(read_timeout)
+        .build()
+        .map_err(req_err)
 }
 
 /// Content-Length of the file that would be downloaded (HEAD, following redirects).
 pub async fn download_size(t: Tool) -> Result<Option<u64>, LumiError> {
-    let resp = client()?.head(source(t).url).send().await.map_err(net_err)?;
-    let resp = resp.error_for_status().map_err(net_err)?;
+    let resp = client()?.head(source(t).url).send().await.map_err(req_err)?;
+    let resp = resp.error_for_status().map_err(req_err)?;
     Ok(resp
         .headers()
         .get(reqwest::header::CONTENT_LENGTH)
@@ -76,6 +101,14 @@ pub async fn download_size(t: Tool) -> Result<Option<u64>, LumiError> {
 /// Finds the hash for `name` in a `sha256sum`-style list. A list with a single
 /// entry (or a bare hash) is accepted regardless of the file name.
 pub fn parse_sha256sums(text: &str, name: &str) -> Option<String> {
+    // PowerShell Get-FileHash output (deno): a "Hash : <HEX>" line.
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("hash") && !v.trim().is_empty() {
+                return Some(v.trim().to_lowercase());
+            }
+        }
+    }
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     for line in &lines {
         let mut parts = line.split_whitespace();
@@ -151,14 +184,14 @@ async fn download_inner(
     tmp: &Path,
     progress: Progress<'_>,
 ) -> Result<(), LumiError> {
-    let resp = client.get(url).send().await.map_err(net_err)?.error_for_status().map_err(net_err)?;
+    let resp = client.get(url).send().await.map_err(req_err)?.error_for_status().map_err(req_err)?;
     let total = resp.content_length();
     let mut file = tokio::fs::File::create(tmp).await.map_err(io_err)?;
     let mut stream = resp.bytes_stream();
     let (mut downloaded, mut last) = (0u64, Instant::now());
     progress(0, total);
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(net_err)?;
+        let chunk = chunk.map_err(req_err)?;
         file.write_all(&chunk).await.map_err(io_err)?;
         downloaded += chunk.len() as u64;
         if last.elapsed() >= PROGRESS_INTERVAL {
@@ -178,8 +211,8 @@ async fn download_inner(
 }
 
 async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<String, LumiError> {
-    let resp = client.get(url).send().await.map_err(net_err)?.error_for_status().map_err(net_err)?;
-    resp.text().await.map_err(net_err)
+    let resp = client.get(url).send().await.map_err(req_err)?.error_for_status().map_err(req_err)?;
+    resp.text().await.map_err(req_err)
 }
 
 /// Extracts the first entry matching each `wanted` suffix (e.g. `bin/ffmpeg.exe`)
@@ -264,6 +297,11 @@ mod tests {
         assert_eq!(parse_sha256sums(text, "yt-dlp_x86.exe"), Some("def".into()));
         assert_eq!(parse_sha256sums(text, "nope.exe"), None);
         assert_eq!(parse_sha256sums("abc123 *deno.zip\n", "deno-x.zip"), Some("abc123".into()));
+        let ps = "\nAlgorithm : SHA256\nHash      : CBA84B26E0DF5AE7F74FC66B86A95B866872A86292EBD84FA1E959927EDD93BF\nPath      : C:\\a\\deno\\deno\\target\\release\\deno-x86_64-pc-windows-msvc.zip\n";
+        assert_eq!(
+            parse_sha256sums(ps, DENO_ZIP),
+            Some("cba84b26e0df5ae7f74fc66b86a95b866872a86292ebd84fa1e959927edd93bf".into())
+        );
         assert_eq!(parse_sha256sums("abc123\n", "deno-x.zip"), Some("abc123".into()));
         assert_eq!(
             parse_sha256sums("AA *ffmpeg-master-latest-win64-gpl.zip\nbb  other.zip", FFMPEG_ZIP),
@@ -333,11 +371,12 @@ mod tests {
 
     #[tokio::test]
     async fn failed_download_leaves_no_partial_file() {
-        use tokio::io::AsyncWriteExt as _;
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             let (mut s, _) = listener.accept().await.unwrap();
+            let _ = s.read(&mut [0u8; 2048]).await; // consume the request first
             let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789").await;
             let _ = s.shutdown().await;
         });
@@ -350,6 +389,30 @@ mod tests {
         assert_eq!(err.error, ErrorCode::Network);
         assert!(!tmp.exists());
         assert!(!dir.path().join("x.exe").exists());
+    }
+
+    #[tokio::test]
+    async fn stalled_download_times_out_as_network() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let _ = s.read(&mut [0u8; 2048]).await; // consume the request first
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n0123456789").await;
+            tokio::time::sleep(Duration::from_secs(30)).await; // stall, keep socket open
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = dir.path().join("x.exe.download");
+        let mut noop = |_: u64, _: Option<u64>| {};
+        let client = client_with(Duration::from_secs(1)).unwrap();
+        let started = Instant::now();
+        let err = download_to(&client, &format!("http://127.0.0.1:{port}/x"), &tmp, &mut noop)
+            .await
+            .unwrap_err();
+        assert_eq!(err.error, ErrorCode::Network);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(!tmp.exists());
     }
 
     #[tokio::test]
