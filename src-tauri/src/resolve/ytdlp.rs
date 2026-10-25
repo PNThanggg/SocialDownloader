@@ -28,8 +28,11 @@ struct YtInfo {
 }
 
 /// `-J` + the shared yt-dlp flags + optional `--cookies` + the URL.
+/// `--flat-playlist`: a playlist/channel link lists its entries without extracting each one, so it
+/// fails fast with PlaylistNotSupported. Carousel entries (Instagram/Facebook) are full info dicts and
+/// are unaffected.
 pub fn ytdlp_resolve_args(url: &str, cookies: Option<&Path>) -> Vec<OsString> {
-    let mut args = vec![OsString::from("-J")];
+    let mut args = vec![OsString::from("-J"), OsString::from("--flat-playlist")];
     args.extend(ytdlp_common_args());
     if let Some(p) = cookies {
         args.push("--cookies".into());
@@ -255,5 +258,19 @@ mod tests {
         assert_eq!(s.last().map(String::as_str), Some("https://x/y"));
         let no = ytdlp_resolve_args("u", None);
         assert!(!no.iter().any(|a| a == "--cookies"));
+    }
+
+    /// A playlist/channel link must come back fast as a flat list (then PlaylistNotSupported),
+    /// not after every entry was fully extracted.
+    #[test]
+    fn resolve_args_are_flat() {
+        let s: Vec<String> = ytdlp_resolve_args("u", None).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(s.iter().any(|a| a == "--flat-playlist"));
+    }
+
+    #[test]
+    fn flat_playlist_of_url_entries_is_still_rejected() {
+        let json = r#"{"_type":"playlist","id":"PL","title":"p","entries":[{"_type":"url","url":"https://www.youtube.com/watch?v=a","ie_key":"Youtube"}]}"#;
+        assert_eq!(parse_ytdlp_json(Site::Youtube, json, true).unwrap_err(), ErrorCode::PlaylistNotSupported);
     }
 }
