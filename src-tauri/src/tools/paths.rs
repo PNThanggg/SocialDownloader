@@ -13,6 +13,15 @@ pub fn bin_dir() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("Lumi").join("bin")
 }
 
+/// `%LOCALAPPDATA%\Lumi\tmp` (per-job scratch dirs live below it). Tests redirect it with `LUMI_TMP_DIR`.
+pub fn tmp_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = std::env::var_os("LUMI_TMP_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("Lumi").join("tmp")
+}
+
 pub fn exe_name(t: Tool) -> &'static str {
     match t {
         Tool::YtDlp => "yt-dlp.exe",

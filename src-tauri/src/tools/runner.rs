@@ -7,7 +7,7 @@ use super::paths::{bin_dir, tool_path};
 use super::Tool;
 use crate::errors::{ErrorCode, LumiError};
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone)]
 pub struct RunOutput {

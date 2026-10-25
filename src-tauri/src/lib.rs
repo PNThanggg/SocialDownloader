@@ -20,6 +20,7 @@ pub fn run() {
         .manage(window_fx::WindowEffect::default())
         .manage(tools::ToolsState::default())
         .manage(resolve::ResolveCache::default())
+        .manage(download::jobs::JobManager::default())
         .invoke_handler(tauri::generate_handler![
             window_fx::window_effect,
             tools::tools_status,
@@ -27,6 +28,9 @@ pub fn run() {
             tools::install_tool,
             tools::update_tools,
             download::filename::default_filename,
+            download::jobs::download,
+            download::jobs::download_all,
+            download::jobs::cancel_job,
             resolve::resolve,
             thumb::fetch_thumbnail
         ])
