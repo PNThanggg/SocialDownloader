@@ -1,0 +1,107 @@
+{
+ "_type": "playlist",
+ "id": "C0000000000",
+ "title": "Video by example_user",
+ "uploader": "example_user",
+ "channel": "example_user",
+ "webpage_url": "https://www.instagram.com/p/C0000000000/",
+ "original_url": "https://www.instagram.com/p/C0000000000/",
+ "entries": [
+  {
+   "id": "C0000000000_1",
+   "title": "Video 1",
+   "thumbnail": "https://scontent.cdninstagram.com/v/t51.2885-15/…0",
+   "formats": [
+    {
+     "format_id": "dash-0-0",
+     "ext": "mp4",
+     "width": 480,
+     "height": 854,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 900,
+     "filesize_approx": 1200000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    },
+    {
+     "format_id": "dash-0-1",
+     "ext": "mp4",
+     "width": 720,
+     "height": 1280,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 1800,
+     "filesize_approx": 2400000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    }
+   ],
+   "duration": 8
+  },
+  {
+   "id": "C0000000000_2",
+   "title": "Video 2",
+   "thumbnail": "https://scontent.cdninstagram.com/v/t51.2885-15/…1",
+   "formats": [
+    {
+     "format_id": "dash-1-0",
+     "ext": "mp4",
+     "width": 480,
+     "height": 854,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 900,
+     "filesize_approx": 1200000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    },
+    {
+     "format_id": "dash-1-1",
+     "ext": "mp4",
+     "width": 720,
+     "height": 1280,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 1800,
+     "filesize_approx": 2400000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    }
+   ],
+   "duration": 9
+  },
+  {
+   "id": "C0000000000_3",
+   "title": "Video 3",
+   "thumbnail": "https://scontent.cdninstagram.com/v/t51.2885-15/…2",
+   "formats": [
+    {
+     "format_id": "dash-2-0",
+     "ext": "mp4",
+     "width": 480,
+     "height": 854,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 900,
+     "filesize_approx": 1200000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    },
+    {
+     "format_id": "dash-2-1",
+     "ext": "mp4",
+     "width": 720,
+     "height": 1280,
+     "vcodec": "avc1.64001F",
+     "acodec": "mp4a.40.2",
+     "protocol": "https",
+     "tbr": 1800,
+     "filesize_approx": 2400000,
+     "url": "https://scontent.cdninstagram.com/o1/v/t16/f2/m86/…"
+    }
+   ],
+   "duration": 10
+  }
+ ]
+}

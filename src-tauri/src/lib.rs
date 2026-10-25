@@ -1,5 +1,6 @@
 mod errors;
 mod model;
+mod resolve;
 mod site;
 mod tools;
 mod window_fx;

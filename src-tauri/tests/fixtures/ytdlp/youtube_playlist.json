@@ -1,0 +1,39 @@
+{
+ "_type": "playlist",
+ "id": "PL59FEE129ADFF2B12",
+ "title": "Test Playlist",
+ "webpage_url": "https://www.youtube.com/playlist?list=PL59FEE129ADFF2B12",
+ "original_url": "https://www.youtube.com/playlist?list=PL59FEE129ADFF2B12",
+ "uploader": "GoogleVoice",
+ "channel": "GoogleVoice",
+ "entries": [
+  {
+   "_type": "url",
+   "id": "EjN5avRvApk",
+   "title": "The Google Story",
+   "url": "https://www.youtube.com/watch?v=EjN5avRvApk",
+   "ie_key": "Youtube"
+  },
+  {
+   "_type": "url",
+   "id": "nnsSUqgkDwU",
+   "title": "Parisian Love",
+   "url": "https://www.youtube.com/watch?v=nnsSUqgkDwU",
+   "ie_key": "Youtube"
+  },
+  {
+   "_type": "url",
+   "id": "xgrcK9Ozb_Q",
+   "title": "Cake",
+   "url": "https://www.youtube.com/watch?v=xgrcK9Ozb_Q",
+   "ie_key": "Youtube"
+  },
+  {
+   "_type": "url",
+   "id": "yi50KlsCBio",
+   "title": null,
+   "url": "https://www.youtube.com/watch?v=yi50KlsCBio",
+   "ie_key": "Youtube"
+  }
+ ]
+}
