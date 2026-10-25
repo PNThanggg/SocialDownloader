@@ -1,54 +1,84 @@
 # Lumi
 
-A small Windows desktop app (Tauri 2 + Svelte 5) that downloads media from TikTok, Instagram,
-YouTube and Facebook: paste a link, pick MP4 / MP3 / image (or TikTok's original sound), save.
+A small Windows desktop app for saving media from TikTok, Instagram, YouTube and Facebook.
+Paste a link, pick a format, choose where to save. No browser, no ads, no download sites.
+
+Built with Tauri 2 (Rust) and Svelte 5.
+
+## Features
+
+- **Video, audio and images**: MP4 in each available quality, MP3 from any video, and single images or
+  whole carousels (**Download all** saves every item into a folder).
+- **TikTok original sound**: when a video uses a track, Lumi offers it as its own MP3 with title, artist
+  and cover art, separate from the video's audio.
+- **Download history**: every finished download is listed under the clock button with the post's
+  original link. **Download again** reads that link afresh, so it works long after the direct media
+  URLs have expired.
+- **Instagram and Facebook sign-in**: connect an account in Settings for posts that need it. Each site
+  signs in through its own in-app window, and its cookies are DPAPI-encrypted at rest.
+- **Plain-language errors** with a way forward (connect, update the tools, retry), in Vietnamese and
+  English.
+- **Small installer** (about 2.5 MB): the download tools are fetched on first launch, not bundled.
+
+## How it works
 
 Lumi drives [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl),
-which it downloads on first launch into `%LOCALAPPDATA%\Lumi\bin`. ffmpeg (MP3 and merging video with
-sound) and deno (every YouTube quality) are downloaded the first time they are needed, after asking.
-Instagram and Facebook can be connected in Settings for posts that need signing in; their cookies are
-DPAPI-encrypted at rest.
+which it downloads on first launch. Two more tools are fetched only when first needed, after asking:
+[ffmpeg](https://ffmpeg.org/) (MP3 and joining video with sound) and [deno](https://deno.com/) (every
+YouTube quality). **Settings → Tools → Update** updates yt-dlp and gallery-dl.
 
-The design lives in `docs/superpowers/specs/2026-10-25-lumi-design.md`.
+Everything Lumi keeps lives in `%LOCALAPPDATA%\Lumi`:
+
+| Path | What |
+|---|---|
+| `bin\` | yt-dlp, gallery-dl, ffmpeg, deno |
+| `accounts\` | encrypted cookie jars for connected accounts |
+| `webdata\accounts\<site>\` | each login window's own WebView profile |
+| `history.json` | download history |
+| `tmp\` | in-progress downloads, emptied on every start |
+
+The design is in [`docs/superpowers/specs/2026-10-25-lumi-design.md`](docs/superpowers/specs/2026-10-25-lumi-design.md)
+(Vietnamese copy alongside it).
+
+## Requirements
+
+Windows 10 or 11 (x64) with WebView2, which ships with Windows 11. macOS and Linux are not supported.
 
 ## Develop
 
-Requirements: Node 20+, Rust (MSVC toolchain), WebView2.
+You need Node 20+ and Rust with the MSVC toolchain.
 
 ```sh
 npm install
-npm run tauri dev          # run the app
+npm run tauri dev
 ```
+
+Dev-only screens with sample data, no network needed: `npm run dev`, then open
+`http://localhost:5173/?demo=<name>`, for example `history`, `settings`, `instagram` or `error`
+(the full list is in `src/lib/dev/demo.ts`).
 
 ## Test
 
 ```sh
-cd src-tauri && cargo test # Rust core (fake tools, no network)
-npx vitest run             # UI
-npm run check              # svelte-check + tsc
+npm run check                  # svelte-check + tsc
+npx vitest run                 # UI
+cd src-tauri && cargo test     # Rust core (fake tools, no network)
 ```
 
-Network tests that use the real tools are ignored by default:
+Tests that hit the network with the real tools are skipped by default:
 `cd src-tauri && cargo test -- --ignored --nocapture`.
+
+Before a release, walk through [`docs/manual-test-checklist.md`](docs/manual-test-checklist.md).
 
 ## Build
 
 ```sh
-npm run tauri build        # NSIS installer in src-tauri/target/release/bundle/nsis/
+npm run tauri build
 ```
 
-## CI / release (GitHub Actions)
+The installer is written to `src-tauri/target/release/bundle/nsis/Lumi_<version>_x64-setup.exe`.
+It is not code-signed, so Windows SmartScreen warns on first install.
 
-- `.github/workflows/ci.yml`: every push to `master`/`main` and every pull request runs the type check,
-  the UI tests and the Rust tests on Windows.
-- `.github/workflows/release.yml`: pushing a tag such as `v0.1.0` (keep it equal to `version` in
-  `src-tauri/tauri.conf.json`) builds the Windows installer and attaches it to a **draft** GitHub Release;
-  publish the draft by hand. Running the workflow manually only builds, and the installer is kept as a run
-  artifact.
+## Note
 
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-macOS is not built yet: the app is Windows-only (DPAPI, Windows tool builds, Mica, per-site WebView2
-profiles). The release matrix has a commented-out macOS entry to enable once the app is ported.
+Lumi is for personal use. Respect each platform's terms and the uploader's rights.
