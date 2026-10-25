@@ -71,7 +71,7 @@ fn attach_sound(info: &mut MediaInfo, sound: SoundMeta) {
     item.options.push(MediaOption {
         id: "sound".into(),
         kind: OptionKind::OriginalSound,
-        label: format!("{} — {}", sound.title, sound.artist),
+        label: if sound.artist.is_empty() { sound.title.clone() } else { format!("{} — {}", sound.title, sound.artist) },
         ext: "mp3".into(),
         filesize: None,
         direct_url: Some(sound.play_url.clone()),
@@ -83,11 +83,21 @@ fn attach_sound(info: &mut MediaInfo, sound: SoundMeta) {
 /// Resolves `url` with the site's primary engine, trying the other engine once on a soft failure.
 /// The result is cached under both the trimmed input URL and `info.source_url`.
 pub async fn resolve_url(url: &str, cache: &ResolveCache) -> Result<MediaInfo, LumiError> {
-    resolve_inner(url, cache, true).await
+    resolve_inner(url, cache, |u: String| async move {
+        // Decrypted only on this rare path; the file is deleted when `cookies` drops.
+        let cookies = cookie_file_for(Site::Tiktok).ok().flatten();
+        fetch_tiktok_sound(&u, cookies.as_ref().map(|c| c.0.as_path())).await
+    })
+    .await
 }
 
-/// `scrape_sound` gates the TikTok page fetch so offline tests stay deterministic.
-async fn resolve_inner(url: &str, cache: &ResolveCache, scrape_sound: bool) -> Result<MediaInfo, LumiError> {
+/// TikTok sound: the yt-dlp `audio` format first (free); `scrape` (the page fetch) only when that yields nothing.
+/// It is injected so offline tests stay deterministic.
+async fn resolve_inner<F, Fut>(url: &str, cache: &ResolveCache, scrape: F) -> Result<MediaInfo, LumiError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Option<SoundMeta>>,
+{
     let url = url.trim();
     let site = detect_site(url)
         .ok_or_else(|| LumiError::new(ErrorCode::UnsupportedUrl, format!("not an http(s) URL: {url}")))?;
@@ -104,13 +114,11 @@ async fn resolve_inner(url: &str, cache: &ResolveCache, scrape_sound: bool) -> R
         info.source_url = url.to_owned();
     }
     if site == Site::Tiktok {
-        let scraped = if scrape_sound {
-            let cookies = cookie_file_for(site).ok().flatten();
-            fetch_tiktok_sound(url, cookies.as_ref().map(|c| c.0.as_path())).await
-        } else {
-            None
+        let sound = match raw.as_deref().and_then(ytdlp_sound_fallback) {
+            Some(s) => Some(s),
+            None => scrape(url.to_owned()).await,
         };
-        if let Some(sound) = scraped.or_else(|| raw.as_deref().and_then(ytdlp_sound_fallback)) {
+        if let Some(sound) = sound {
             attach_sound(&mut info, sound);
         }
     }
@@ -139,6 +147,10 @@ mod tests {
         std::fs::write(dir.join(format!("{name}.err")), stderr).unwrap();
         let script = format!("@echo off\r\ntype \"%~dp0{name}.out\"\r\ntype \"%~dp0{name}.err\" 1>&2\r\nexit /b {code}\r\n");
         std::fs::write(dir.join(format!("{name}.cmd")), script).unwrap();
+    }
+
+    async fn no_scrape(_: String) -> Option<SoundMeta> {
+        None
     }
 
     fn with_bin_dir() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
@@ -186,7 +198,7 @@ mod tests {
         let (_g, dir) = with_bin_dir();
         fake_tool(dir.path(), "yt-dlp", YT_TIKTOK, "", 0);
         let cache = ResolveCache::default();
-        let info = resolve_inner("https://vt.tiktok.com/ZSabc/", &cache, false).await.unwrap();
+        let info = resolve_inner("https://vt.tiktok.com/ZSabc/", &cache, no_scrape).await.unwrap();
         unsafe { std::env::remove_var("LUMI_BIN_DIR") };
         assert_eq!(info.source_url, "https://www.tiktok.com/@scout2015/video/6718335390845095173");
         assert_eq!(cache.get(&info.source_url), Some(info.clone()));
@@ -200,7 +212,7 @@ mod tests {
         json["track"] = "Cool Song".into();
         json["artists"] = serde_json::json!(["Some Artist"]);
         fake_tool(dir.path(), "yt-dlp", &json.to_string(), "", 0);
-        let info = resolve_inner("https://www.tiktok.com/@a/video/1", &ResolveCache::default(), false).await.unwrap();
+        let info = resolve_inner("https://www.tiktok.com/@a/video/1", &ResolveCache::default(), no_scrape).await.unwrap();
         unsafe { std::env::remove_var("LUMI_BIN_DIR") };
         let opt = info.items[0].options.last().unwrap();
         assert_eq!(opt.id, "sound");
@@ -213,11 +225,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ytdlp_sound_wins_and_scrape_is_only_a_fallback() {
+        let other = || SoundMeta { title: "Scraped".into(), artist: "".into(), cover: None, play_url: "https://s/p.mp3".into() };
+        // yt-dlp has an audio format: the injected scraper must not be used.
+        let (_g, dir) = with_bin_dir();
+        fake_tool(dir.path(), "yt-dlp", YT_TIKTOK, "", 0);
+        let info = resolve_inner("https://www.tiktok.com/@a/video/1", &ResolveCache::default(), |_| async move {
+            panic!("scrape must not run when yt-dlp has the audio format")
+        })
+        .await
+        .unwrap();
+        assert!(info.sound.unwrap().play_url.starts_with("https://v58.tiktokcdn.com/"));
+        // No audio format: the scraper's result is used (empty artist: no separator in the label).
+        let mut json: serde_json::Value = serde_json::from_str(YT_TIKTOK).unwrap();
+        json["formats"].as_array_mut().unwrap().retain(|f| f["format_id"] != "audio");
+        fake_tool(dir.path(), "yt-dlp", &json.to_string(), "", 0);
+        let s = other();
+        let info = resolve_inner("https://www.tiktok.com/@a/video/1", &ResolveCache::default(), |_| async move { Some(s) })
+            .await
+            .unwrap();
+        unsafe { std::env::remove_var("LUMI_BIN_DIR") };
+        assert_eq!(info.items[0].options.last().unwrap().label, "Scraped");
+        assert_eq!(info.sound.unwrap().play_url, "https://s/p.mp3");
+    }
+
+    #[tokio::test]
     async fn non_tiktok_gets_no_sound_option() {
         let (_g, dir) = with_bin_dir();
         // Same payload (has an "audio" format) but reached via a YouTube URL.
         fake_tool(dir.path(), "yt-dlp", YT_TIKTOK, "", 0);
-        let info = resolve_inner("https://www.youtube.com/watch?v=x", &ResolveCache::default(), false).await.unwrap();
+        let info = resolve_inner("https://www.youtube.com/watch?v=x", &ResolveCache::default(), no_scrape).await.unwrap();
         unsafe { std::env::remove_var("LUMI_BIN_DIR") };
         assert!(info.sound.is_none());
         assert!(info.items[0].options.iter().all(|o| o.kind != OptionKind::OriginalSound));

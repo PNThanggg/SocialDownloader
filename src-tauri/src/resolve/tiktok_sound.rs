@@ -34,6 +34,11 @@ pub fn parse_tiktok_sound(html: &str) -> Option<SoundMeta> {
     })
 }
 
+fn is_tiktok_domain(d: &str) -> bool {
+    let d = d.trim_start_matches('.');
+    d == "tiktok.com" || d.ends_with(".tiktok.com")
+}
+
 /// Builds a `Cookie` header from a Netscape cookie jar, keeping only TikTok cookies.
 fn cookie_header(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -42,14 +47,19 @@ fn cookie_header(path: &Path) -> Option<String> {
         .map(|l| l.strip_prefix("#HttpOnly_").unwrap_or(l))
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            (f.len() >= 7 && f[0].contains("tiktok.com")).then(|| format!("{}={}", f[5], f[6].trim()))
+            (f.len() >= 7 && is_tiktok_domain(f[0])).then(|| format!("{}={}", f[5], f[6].trim()))
         })
         .collect();
     (!pairs.is_empty()).then(|| pairs.join("; "))
 }
 
-/// Fetches the page (following `vt.`/`vm.` redirects) and scrapes the sound. Any failure is `None`.
+/// Fetches the page (following `vt.`/`vm.` redirects) and scrapes the sound. Any failure is `None`;
+/// the whole fetch is bounded by a hard 8s deadline. Only used when yt-dlp offered no sound.
 pub async fn fetch_tiktok_sound(url: &str, cookies: Option<&Path>) -> Option<SoundMeta> {
+    tokio::time::timeout(std::time::Duration::from_secs(8), fetch_inner(url, cookies)).await.ok().flatten()
+}
+
+async fn fetch_inner(url: &str, cookies: Option<&Path>) -> Option<SoundMeta> {
     let client = crate::thumb::browser_client().ok()?;
     let mut req = client.get(url).header(reqwest::header::REFERER, "https://www.tiktok.com/");
     if let Some(c) = cookies.and_then(cookie_header) {
@@ -122,6 +132,21 @@ mod tests {
         let json = DATA.replace("coverLarge", "coverXl");
         let s = parse_tiktok_sound(&page(&json)).unwrap();
         assert_eq!(s.cover.as_deref(), Some("https://p16-sign.tiktokcdn.com/medium.jpeg"));
+    }
+
+    #[test]
+    fn cookie_header_scopes_to_tiktok_domains() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("c.txt");
+        let jar = "# Netscape
+.tiktok.com	TRUE	/	TRUE	0	a	1
+#HttpOnly_.www.tiktok.com	TRUE	/	TRUE	0	b	2
+tiktok.com	FALSE	/	TRUE	0	c	3
+.nottiktok.com	TRUE	/	TRUE	0	d	4
+evil-tiktok.com.example.org	TRUE	/	TRUE	0	e	5
+";
+        std::fs::write(&p, jar).unwrap();
+        assert_eq!(cookie_header(&p).unwrap(), "a=1; b=2; c=3");
     }
 
     #[test]
