@@ -6,7 +6,9 @@ use tauri::webview::Cookie;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tokio::sync::oneshot;
 
-use super::{account, save, status, store_path, to_netscape, webdata_dir, Account, AccountStatus};
+use super::{
+    account, forget, profile_dir, save_if_current, sign_out_count, status, to_netscape, Account, AccountStatus,
+};
 use crate::errors::{ErrorCode, LumiError};
 use crate::model::Site;
 
@@ -88,11 +90,14 @@ pub(super) async fn connect(app: AppHandle, site: Site) -> Result<AccountStatus,
         return Ok(status(a));
     }
     let url = a.login_url.parse().map_err(|e| err(format!("login url: {e}")))?;
+    let cookie_url: url::Url = a.cookie_url.parse().map_err(|e| err(format!("cookie url: {e}")))?;
+    let host = cookie_url.host_str().unwrap_or_default().to_string();
+    let seen = sign_out_count(a);
     // No capability lists `login-*` and none has `remote` URLs, so this external page gets no IPC.
     let built = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
         .title(a.title)
         .inner_size(480.0, 720.0)
-        .data_directory(webdata_dir())
+        .data_directory(profile_dir(a))
         .build();
     let w = match built {
         Ok(w) => w,
@@ -117,25 +122,24 @@ pub(super) async fn connect(app: AppHandle, site: Site) -> Result<AccountStatus,
         }
         let Some(cookies) = cookies_of(&w, Some(a.cookie_url)).await else { continue };
         if login_complete(site, &cookies) {
-            let saved = save(a, &to_netscape(&cookies));
+            // The read took a while: if the window closed meanwhile (a sign-out destroys it), don't save.
+            let gone = !matches!(closed.try_recv(), Err(oneshot::error::TryRecvError::Empty))
+                || app.get_webview_window(&label).is_none();
+            // `save_if_current` also drops the save when a sign-out raced past the check above.
+            let saved = if gone { Ok(false) } else { save_if_current(a, seen, &to_netscape(&cookies, &host)) };
             let _ = w.destroy();
-            saved?;
-            return Ok(AccountStatus { site, connected: true });
+            return if saved? { Ok(AccountStatus { site, connected: true }) } else { Ok(status(a)) };
         }
     }
 }
 
 pub(super) async fn disconnect(app: AppHandle, site: Site) -> Result<(), LumiError> {
     let a = require(site)?;
-    match std::fs::remove_file(store_path(a)) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(err(format!("delete cookie jar: {e}"))),
-    }
+    forget(a)?;
     if let Some(w) = app.get_webview_window(&format!("login-{}", a.slug)) {
         let _ = w.destroy();
     }
-    clear_profile(&app, &format!("logout-{}", a.slug), webdata_dir()).await
+    clear_profile(&app, &format!("logout-{}", a.slug), profile_dir(a)).await
 }
 
 /// Clears every kind of browsing data in the WebView2 profile at `dir` through a hidden window.

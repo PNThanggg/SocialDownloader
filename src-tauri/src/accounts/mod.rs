@@ -3,6 +3,7 @@ mod login;
 mod netscape;
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 use serde::Serialize;
 
@@ -54,18 +55,75 @@ pub struct AccountStatus {
 pub struct TempCookieFile(pub PathBuf);
 
 impl Drop for TempCookieFile {
+    /// Retries briefly: on Windows a child that just exited (or AV) can still hold the file open.
+    /// Whatever survives is removed by the startup `sweep_tmp`.
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        for attempt in 0..5 {
+            match std::fs::remove_file(&self.0) {
+                Ok(()) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) if attempt < 4 => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(e) => eprintln!("lumi: could not delete temp cookie file {}: {e}", self.0.display()),
+            }
+        }
     }
 }
 
-/// `%LOCALAPPDATA%\Lumi\webdata\accounts`: the login windows' WebView2 profile (mode B reuses it).
+/// `%LOCALAPPDATA%\Lumi\webdata\accounts`: parent of the per-site WebView2 profiles.
 pub fn webdata_dir() -> PathBuf {
     dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("Lumi").join("webdata").join("accounts")
 }
 
+/// `webdata\accounts\<site>`: that site's login (and, later, mode B browse) WebView2 profile.
+/// Per site, so signing out of one site never clears the other's session.
+#[allow(dead_code)] // public for mode B; login uses `profile_dir` directly
+pub fn webdata_dir_for(site: Site) -> Option<PathBuf> {
+    account(site).map(profile_dir)
+}
+
+fn profile_dir(a: &Account) -> PathBuf {
+    webdata_dir().join(a.slug)
+}
+
 fn store_path(a: &Account) -> PathBuf {
     crate::tools::paths::accounts_dir().join(format!("{}.cookies.bin", a.slug))
+}
+
+/// Sign-outs per `ACCOUNTS` index. A connect remembers the count when it starts and saves only if it
+/// is unchanged, so a poll still in flight can't re-create the jar a sign-out just deleted.
+static SIGN_OUTS: Mutex<[u64; 2]> = Mutex::new([0; 2]);
+
+fn sign_outs() -> MutexGuard<'static, [u64; 2]> {
+    SIGN_OUTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn index(a: &Account) -> usize {
+    ACCOUNTS.iter().position(|x| x.site == a.site).expect("account from ACCOUNTS")
+}
+
+fn sign_out_count(a: &Account) -> u64 {
+    sign_outs()[index(a)]
+}
+
+/// `save`, unless `a` was signed out since `seen`. Returns whether it saved.
+fn save_if_current(a: &Account, seen: u64, netscape: &str) -> Result<bool, LumiError> {
+    let counts = sign_outs();
+    if counts[index(a)] != seen {
+        return Ok(false);
+    }
+    save(a, netscape)?;
+    Ok(true)
+}
+
+/// Deletes the jar and counts a sign-out, atomically with respect to `save_if_current`.
+fn forget(a: &Account) -> Result<(), LumiError> {
+    let mut counts = sign_outs();
+    counts[index(a)] += 1;
+    match std::fs::remove_file(store_path(a)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(LumiError::new(ErrorCode::Unknown, format!("delete cookie jar: {e}"))),
+    }
 }
 
 fn status(a: &Account) -> AccountStatus {
@@ -121,7 +179,7 @@ pub async fn connect_account(app: tauri::AppHandle, site: Site) -> Result<Accoun
     login::connect(app, site).await
 }
 
-/// Deletes the cookie jar, then clears the login WebView profile.
+/// Deletes the cookie jar, then clears that site's login WebView profile.
 #[tauri::command]
 pub async fn disconnect_account(app: tauri::AppHandle, site: Site) -> Result<(), LumiError> {
     login::disconnect(app, site).await
@@ -218,6 +276,57 @@ mod tests {
         assert!(!pa.exists() && pb.exists());
         drop(b);
         assert!(!pb.exists());
+    }
+
+    #[test]
+    fn temp_cookie_file_drop_retries_while_another_handle_blocks_delete() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cookies-locked.txt");
+        std::fs::write(&p, "secret").unwrap();
+        // share_mode(0): no FILE_SHARE_DELETE, so DeleteFile fails until this handle closes.
+        let blocker = std::fs::OpenOptions::new().read(true).share_mode(0).open(&p).unwrap();
+        assert!(std::fs::remove_file(&p).is_err(), "precondition: delete is blocked");
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(blocker);
+        });
+        drop(TempCookieFile(p.clone()));
+        t.join().unwrap();
+        assert!(!p.exists(), "drop must retry until the handle is released");
+    }
+
+    #[test]
+    fn per_site_webview_profiles() {
+        let ig = webdata_dir_for(Site::Instagram).unwrap();
+        let fb = webdata_dir_for(Site::Facebook).unwrap();
+        assert_eq!(ig, webdata_dir().join("instagram"));
+        assert_eq!(fb, webdata_dir().join("facebook"));
+        assert_ne!(ig, fb);
+        assert!(webdata_dir_for(Site::Youtube).is_none());
+        // Login and sign-out both resolve the profile through `profile_dir`, so a sign-out clears only its own.
+        for a in &ACCOUNTS {
+            assert_eq!(Some(profile_dir(a)), webdata_dir_for(a.site));
+        }
+    }
+
+    #[test]
+    fn save_racing_a_sign_out_is_dropped() {
+        let d = Dirs::new();
+        let ig = account(Site::Instagram).unwrap();
+        let fb = account(Site::Facebook).unwrap();
+        let seen = sign_out_count(ig);
+        let fb_seen = sign_out_count(fb);
+        forget(ig).unwrap();
+        assert!(!save_if_current(ig, seen, "# Netscape HTTP Cookie File\n").unwrap());
+        assert!(!d.accounts.path().join("instagram.cookies.bin").exists(), "sign-out must win");
+        // A sign-out of one site doesn't block the other, and a fresh connect saves.
+        assert!(save_if_current(fb, fb_seen, "# Netscape HTTP Cookie File\n").unwrap());
+        assert!(save_if_current(ig, sign_out_count(ig), "# Netscape HTTP Cookie File\n").unwrap());
+        assert!(d.accounts.path().join("instagram.cookies.bin").exists());
+        forget(ig).unwrap();
+        assert!(!d.accounts.path().join("instagram.cookies.bin").exists());
+        forget(ig).unwrap(); // already gone: still Ok
     }
 
     #[test]
