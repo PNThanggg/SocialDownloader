@@ -101,14 +101,17 @@ fn ytdlp_plan(
     if needs_ffmpeg(info, opt) {
         a.push("--embed-metadata".into());
     }
-    let stem = dest.file_stem().ok_or(ErrorCode::Unknown)?.to_string_lossy().replace('%', "%%");
+    let stem = dest.file_stem().ok_or(ErrorCode::Unknown)?;
     let dir = dest.parent().unwrap_or_else(|| Path::new(""));
+    // `-o` is an output template as a whole: escape `%` in the directory too.
+    let base = dir.join(stem).to_string_lossy().replace('%', "%%");
+    let template = format!("{base}.%(ext)s");
     let mut temp = OsString::from("temp:");
     temp.push(tmp);
     a.extend(os(&["--force-overwrites", "-P"]));
     a.push(temp);
     a.push("-o".into());
-    a.push(dir.join(format!("{stem}.%(ext)s")).into_os_string());
+    a.push(template.into());
     a.extend(os(&["--newline", "--progress-template", PROGRESS_TEMPLATE]));
     if item > 0 {
         a.extend(os(&["--playlist-items", &(item + 1).to_string()]));
@@ -278,6 +281,20 @@ mod tests {
         assert!(after(&a, "-o").ends_with("100%% sure.%(ext)s"));
         assert_eq!(after(&a, "--cookies"), r"C:\tmp\c.txt");
         assert_eq!(a.last().unwrap(), "https://x.test/v");
+    }
+
+    #[test]
+    fn plan_percent_in_directory_escaped() {
+        let i = info(Site::Tiktok, Engine::YtDlp, 1, vec![]);
+        let a = ytdlp_args(&build_plan(&i, &OptionId::Audio { item: 0 }, &PathBuf::from(r"C:\Videos\50% off\clip.mp3"), &tmp(), None).unwrap());
+        assert_eq!(after(&a, "-o"), r"C:\Videos\50%% off\clip.%(ext)s");
+    }
+
+    #[test]
+    fn plan_non_ascii_dest_roundtrips() {
+        let i = info(Site::Tiktok, Engine::YtDlp, 1, vec![]);
+        let a = ytdlp_args(&build_plan(&i, &OptionId::Audio { item: 0 }, &PathBuf::from(r"D:\Nhạc\Bài hát 🎧.mp3"), &tmp(), None).unwrap());
+        assert_eq!(after(&a, "-o"), r"D:\Nhạc\Bài hát 🎧.%(ext)s");
     }
 
     #[test]

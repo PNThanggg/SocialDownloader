@@ -32,7 +32,13 @@ pub fn sanitize_filename(title: &str) -> String {
 
 #[tauri::command]
 pub fn default_filename(title: String, ext: String) -> String {
-    format!("{}.{}", sanitize_filename(&title), ext)
+    let ext: String = ext
+        .chars()
+        .filter(|c| !c.is_control() && !c.is_whitespace() && !"<>:\"/\\|?*".contains(*c))
+        .collect();
+    let ext = ext.trim_matches('.');
+    let stem = sanitize_filename(&title);
+    if ext.is_empty() { stem } else { format!("{stem}.{ext}") }
 }
 
 #[cfg(test)]
@@ -77,5 +83,9 @@ mod tests {
     #[test]
     fn default_filename_joins_ext() {
         assert_eq!(default_filename("a/b".into(), "mp3".into()), "a b.mp3");
+        assert_eq!(default_filename("t".into(), ".mp3".into()), "t.mp3");
+        assert_eq!(default_filename("t".into(), "..\\m/p3".into()), "t.mp3");
+        assert_eq!(default_filename("t".into(), "".into()), "t");
+        assert_eq!(default_filename("t".into(), ".".into()), "t");
     }
 }
