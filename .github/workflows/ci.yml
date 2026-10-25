@@ -1,0 +1,50 @@
+# Checks and tests on every push and pull request.
+# Windows only for now: the Rust core is Windows-specific (DPAPI, .exe tools, taskkill),
+# and its tests drive fake tools written as .cmd scripts.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Type check (svelte-check + tsc)
+        run: npm run check
+
+      - name: UI tests
+        run: npx vitest run
+
+      # `generate_context!` embeds ../dist, so the frontend must be built before Rust compiles.
+      - name: Build frontend
+        run: npm run build
+
+      # Network tests are #[ignore]d and never run here.
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --locked

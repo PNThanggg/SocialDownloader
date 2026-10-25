@@ -1,0 +1,70 @@
+# Builds the installers.
+# - Push a tag `v0.1.0` (matching "version" in src-tauri/tauri.conf.json): builds and attaches
+#   the installer to a draft GitHub Release with that name. Publish the draft by hand.
+# - Run manually (Actions → Release → Run workflow): builds only, the installer is a run artifact.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: ''
+          # macOS: enable once the app is ported (keychain instead of DPAPI, macOS tool builds,
+          # window effects, per-site login profiles). Also add "dmg" to bundle.targets.
+          # - name: macOS universal
+          #   os: macos-latest
+          #   args: --target universal-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm packages
+        run: npm ci
+
+      # `npm run tauri build` runs `npm run build` (beforeBuildCommand) itself.
+      - name: Build and (on a tag) upload to the draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: Lumi ${{ github.ref_name }}
+          releaseBody: See the commits since the previous release.
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+      - name: Keep the installer as a run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumi-${{ matrix.os }}
+          path: |
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+          if-no-files-found: error
